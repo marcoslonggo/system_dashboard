@@ -685,6 +685,8 @@ export default function Dashboard() {
         }
         await refreshIconOverrides()
         await fetchSystems()
+        setIconPickerTarget(null)
+        setIconSearch('')
       } catch (error) {
         console.error('Failed to update icon override', error)
         alert('Could not update icon override')
