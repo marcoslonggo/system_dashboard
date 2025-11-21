@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { SystemAPIClient } from '@/lib/api-clients'
+import { prisma } from '@/lib/db'
+import { decryptSensitive } from '@/lib/encryption'
 
 interface SystemInfo {
+  id?: string
   name: string
   type: 'truenas' | 'unraid'
   status: 'online' | 'offline' | 'warning'
@@ -24,8 +27,8 @@ interface App {
   url?: string
 }
 
-// Configuration storage (in production, this should be in a database)
-const systemConfigs = {
+// Fallback configuration when no systems are stored in SQLite
+const envConfigs = {
   truenas: {
     host: process.env.TRUENAS_HOST || '192.168.1.100',
     apiKey: process.env.TRUENAS_API_KEY || '',
@@ -47,115 +50,64 @@ const systemConfigs = {
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams
-    const type = searchParams.get('type') // 'truenas', 'unraid', or null for both
-
-    let systems: SystemInfo[] = []
+    const typeFilter = searchParams.get('type') as 'truenas' | 'unraid' | null
+    const systems: SystemInfo[] = []
     const apiClient = new SystemAPIClient()
 
-    // Check TrueNAS configuration
-    if (!type || type === 'truenas') {
-      if (!systemConfigs.truenas.enabled) {
-        systems.push({
-          name: 'TrueNAS Server',
-          type: 'truenas',
-          status: 'offline',
-          uptime: 'N/A',
-          cpu: 0,
-          memory: 0,
-          storage: 0,
-          temperature: 0,
-          apps: []
-        })
-      } else if (!systemConfigs.truenas.apiKey) {
-        systems.push({
-          name: 'TrueNAS Server',
-          type: 'truenas',
-          status: 'offline',
-          uptime: 'API key required',
-          cpu: 0,
-          memory: 0,
-          storage: 0,
-          temperature: 0,
-          gpu: null,
-          apps: []
-        })
-      } else {
-        try {
-          apiClient.initializeTrueNAS(
-            systemConfigs.truenas.host,
-            systemConfigs.truenas.apiKey,
-            systemConfigs.truenas.port,
-            systemConfigs.truenas.useSsl,
-            systemConfigs.truenas.allowSelfSigned
-          )
-          
-          const truenasInfo = await apiClient.getTrueNASInfo()
-          systems.push(truenasInfo)
-          console.log('Successfully fetched TrueNAS data via API')
-        } catch (error) {
-          console.error('Failed to fetch TrueNAS info via API:', error)
-          systems.push({
-            name: 'TrueNAS Server',
-            type: 'truenas',
-            status: 'offline',
-            uptime: 'Connection failed',
-            cpu: 0,
-            memory: 0,
-            storage: 0,
-            temperature: 0,
-            gpu: null,
-            apps: []
-          })
-        }
-      }
-    }
+    const storedConfigs = await prisma.systemConfig.findMany({
+      orderBy: { createdAt: 'asc' }
+    })
 
-    // Check Unraid configuration
-    if (!type || type === 'unraid') {
-      if (!systemConfigs.unraid.enabled) {
-        systems.push({
-          name: 'Unraid Server',
-          type: 'unraid',
-          status: 'offline',
-          uptime: 'N/A',
-          cpu: 0,
-          memory: 0,
-          storage: 0,
-          temperature: 0,
-          gpu: null,
-          apps: []
-        })
-      } else if (!systemConfigs.unraid.apiKey) {
-        systems.push({
-          name: 'Unraid Server',
-          type: 'unraid',
-          status: 'offline',
-          uptime: 'API key required',
-          cpu: 0,
-          memory: 0,
-          storage: 0,
-          temperature: 0,
-          gpu: null,
-          apps: []
-        })
-      } else {
-        try {
-          apiClient.initializeUnraid(
-            systemConfigs.unraid.host,
-            systemConfigs.unraid.apiKey,
-            systemConfigs.unraid.port,
-            systemConfigs.unraid.useSsl,
-            systemConfigs.unraid.allowSelfSigned
-          )
-          
-          const unraidInfo = await apiClient.getUnraidInfo()
-          systems.push(unraidInfo)
-          console.log('Successfully fetched Unraid data via API')
-        } catch (error) {
-          console.error('Failed to fetch Unraid info via API:', error)
+    if (storedConfigs.length > 0) {
+      for (const config of storedConfigs) {
+        if (typeFilter && config.type !== typeFilter) continue
+
+        if (!config.enabled) {
           systems.push({
-            name: 'Unraid Server',
-            type: 'unraid',
+            id: config.id,
+            name: config.name,
+            type: config.type,
+            status: 'offline',
+            uptime: 'Disabled',
+            cpu: 0,
+            memory: 0,
+            storage: 0,
+            temperature: 0,
+            gpu: null,
+            apps: []
+          })
+          continue
+        }
+
+        try {
+          const apiKey = decryptSensitive(config.apiKeyEncrypted)
+          if (config.type === 'truenas') {
+            apiClient.initializeTrueNAS(
+              config.host,
+              apiKey,
+              config.port,
+              config.useSsl,
+              config.allowSelfSigned
+            )
+            const info = await apiClient.getTrueNASInfo()
+            systems.push({ ...info, id: config.id, name: config.name })
+          } else {
+            apiClient.initializeUnraid(
+              config.host,
+              apiKey,
+              config.port,
+              config.useSsl,
+              config.allowSelfSigned
+            )
+            const info = await apiClient.getUnraidInfo()
+            systems.push({ ...info, id: config.id, name: config.name })
+          }
+        } catch (err) {
+          console.error(`Failed to fetch ${config.name}`, err)
+          systems.push({
+            id: config.id,
+            name: config.name,
+            type: config.type,
             status: 'offline',
             uptime: 'Connection failed',
             cpu: 0,
@@ -167,35 +119,20 @@ export async function GET(request: NextRequest) {
           })
         }
       }
+    } else {
+      await fetchFromEnvConfigs({ typeFilter, systems, apiClient })
     }
 
     return NextResponse.json({
       success: true,
       data: systems,
       timestamp: new Date().toISOString(),
-      source: 'api',
-      config: {
-        truenas: {
-          enabled: systemConfigs.truenas.enabled,
-          hasApiKey: !!systemConfigs.truenas.apiKey,
-          host: systemConfigs.truenas.host,
-          useSsl: systemConfigs.truenas.useSsl,
-          allowSelfSigned: systemConfigs.truenas.allowSelfSigned
-        },
-        unraid: {
-          enabled: systemConfigs.unraid.enabled,
-          hasApiKey: !!systemConfigs.unraid.apiKey,
-          host: systemConfigs.unraid.host,
-          useSsl: systemConfigs.unraid.useSsl,
-          allowSelfSigned: systemConfigs.unraid.allowSelfSigned
-        }
-      }
+      source: 'api'
     })
-
   } catch (error) {
     console.error('Systems API error:', error)
     return NextResponse.json(
-      { 
+      {
         success: false,
         error: 'Failed to fetch system information',
         message: error instanceof Error ? error.message : 'Unknown error',
@@ -203,5 +140,117 @@ export async function GET(request: NextRequest) {
       },
       { status: 500 }
     )
+  }
+}
+
+async function fetchFromEnvConfigs({
+  typeFilter,
+  systems,
+  apiClient
+}: {
+  typeFilter: 'truenas' | 'unraid' | null
+  systems: SystemInfo[]
+  apiClient: SystemAPIClient
+}) {
+  if (!typeFilter || typeFilter === 'truenas') {
+    const cfg = envConfigs.truenas
+    if (!cfg.enabled) {
+      systems.push({
+        name: 'TrueNAS Server',
+        type: 'truenas',
+        status: 'offline',
+        uptime: 'N/A',
+        cpu: 0,
+        memory: 0,
+        storage: 0,
+        temperature: 0,
+        gpu: null,
+        apps: []
+      })
+    } else if (!cfg.apiKey) {
+      systems.push({
+        name: 'TrueNAS Server',
+        type: 'truenas',
+        status: 'offline',
+        uptime: 'API key required',
+        cpu: 0,
+        memory: 0,
+        storage: 0,
+        temperature: 0,
+        gpu: null,
+        apps: []
+      })
+    } else {
+      try {
+        apiClient.initializeTrueNAS(cfg.host, cfg.apiKey, cfg.port, cfg.useSsl, cfg.allowSelfSigned)
+        const info = await apiClient.getTrueNASInfo()
+        systems.push(info)
+      } catch (err) {
+        console.error('TrueNAS fallback error', err)
+        systems.push({
+          name: 'TrueNAS Server',
+          type: 'truenas',
+          status: 'offline',
+          uptime: 'Connection failed',
+          cpu: 0,
+          memory: 0,
+          storage: 0,
+          temperature: 0,
+          gpu: null,
+          apps: []
+        })
+      }
+    }
+  }
+
+  if (!typeFilter || typeFilter === 'unraid') {
+    const cfg = envConfigs.unraid
+    if (!cfg.enabled) {
+      systems.push({
+        name: 'Unraid Server',
+        type: 'unraid',
+        status: 'offline',
+        uptime: 'N/A',
+        cpu: 0,
+        memory: 0,
+        storage: 0,
+        temperature: 0,
+        gpu: null,
+        apps: []
+      })
+    } else if (!cfg.apiKey) {
+      systems.push({
+        name: 'Unraid Server',
+        type: 'unraid',
+        status: 'offline',
+        uptime: 'API key required',
+        cpu: 0,
+        memory: 0,
+        storage: 0,
+        temperature: 0,
+        gpu: null,
+        apps: []
+      })
+    } else {
+      try {
+        apiClient.initializeUnraid(cfg.host, cfg.apiKey, cfg.port, cfg.useSsl, cfg.allowSelfSigned)
+        const info = await apiClient.getUnraidInfo()
+        systems.push(info)
+      } catch (err) {
+        console.error('Unraid fallback error', err)
+        systems.push({
+          name: 'Unraid Server',
+          type: 'unraid',
+          status: 'offline',
+          uptime: 'Connection failed',
+          cpu: 0,
+          memory: 0,
+          storage: 0,
+          temperature: 0,
+          gpu: null,
+          apps: []
+        })
+      }
+    }
   }
 }

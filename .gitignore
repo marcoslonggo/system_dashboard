@@ -45,5 +45,6 @@ local-*
 dev.log
 test
 prompt
+prisma/dev.db
 
 server.log

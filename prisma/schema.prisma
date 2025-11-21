@@ -30,3 +30,22 @@ model Post {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model SystemConfig {
+  id               String     @id @default(cuid())
+  name             String
+  host             String
+  port             Int        @default(443)
+  type             SystemType
+  apiKeyEncrypted  String
+  useSsl           Boolean    @default(true)
+  allowSelfSigned  Boolean    @default(false)
+  enabled          Boolean    @default(true)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+}
+
+enum SystemType {
+  truenas
+  unraid
+}

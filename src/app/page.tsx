@@ -37,6 +37,7 @@ import {
 } from 'lucide-react'
 
 interface SystemInfo {
+  id?: string
   name: string
   type: 'truenas' | 'unraid'
   status: 'online' | 'offline' | 'warning'
@@ -61,6 +62,7 @@ interface App {
 
 interface AggregatedApp extends App {
   globalId: string
+  systemId?: string
   systemName: string
   systemType: 'truenas' | 'unraid'
   systemStatus: SystemInfo['status']
@@ -68,21 +70,33 @@ interface AggregatedApp extends App {
   hostMemory: number
 }
 
-interface SystemConfig {
-  truenas: {
-    host: string
-    apiKey: string
-    port: number
-    enabled: boolean
-  }
-  unraid: {
-    host: string
-    apiKey: string
-    port: number
-    enabled: boolean
-  }
+interface DashboardPreferences {
   refreshInterval: number
   notifications: boolean
+}
+
+interface StoredSystemConfig {
+  id: string
+  name: string
+  host: string
+  port: number
+  type: 'truenas' | 'unraid'
+  useSsl: boolean
+  allowSelfSigned: boolean
+  enabled: boolean
+  hasApiKey: boolean
+}
+
+interface SystemConfigForm {
+  id?: string | null
+  name: string
+  host: string
+  port: number
+  type: 'truenas' | 'unraid'
+  apiKey: string
+  useSsl: boolean
+  allowSelfSigned: boolean
+  enabled: boolean
 }
 
 const APP_ORDER_STORAGE_KEY = 'dashboard-app-order'
@@ -163,6 +177,17 @@ const getStatusBadge = (status: string, uptime?: string) => {
   }
 }
 
+const emptyConfigForm: SystemConfigForm = {
+  name: '',
+  host: '',
+  port: 443,
+  type: 'truenas',
+  apiKey: '',
+  useSsl: true,
+  allowSelfSigned: false,
+  enabled: true
+}
+
 export default function Dashboard() {
   const [systems, setSystems] = useState<SystemInfo[]>([
     {
@@ -207,22 +232,15 @@ export default function Dashboard() {
   const [systemDetailsOpen, setSystemDetailsOpen] = useState<Record<string, boolean>>({})
   const [cardMinWidth, setCardMinWidth] = useState(DEFAULT_CARD_WIDTH)
   const [appOrder, setAppOrder] = useState<string[]>([])
-  const [config, setConfig] = useState<SystemConfig>({
-    truenas: {
-      host: '192.168.1.100',
-      apiKey: '',
-      port: 443,
-      enabled: true
-    },
-    unraid: {
-      host: '192.168.1.200',
-      apiKey: '',
-      port: 80,
-      enabled: true
-    },
+  const [config, setConfig] = useState<DashboardPreferences>({
     refreshInterval: 5000,
     notifications: true
   })
+  const [systemConfigs, setSystemConfigs] = useState<StoredSystemConfig[]>([])
+  const [configForm, setConfigForm] = useState<SystemConfigForm>(emptyConfigForm)
+  const [editingConfigId, setEditingConfigId] = useState<string | null>(null)
+  const [configLoading, setConfigLoading] = useState(false)
+  const [configError, setConfigError] = useState<string | null>(null)
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -299,12 +317,33 @@ export default function Dashboard() {
     fetchInitialData()
   }, [])
 
+  useEffect(() => {
+    const loadConfigs = async () => {
+      try {
+        setConfigLoading(true)
+        const response = await fetch('/api/system-configs')
+        if (!response.ok) {
+          throw new Error('Failed to load system configs')
+        }
+        const json = await response.json()
+        setSystemConfigs(json.data || [])
+      } catch (err) {
+        console.error(err)
+        setConfigError('Failed to load system configs')
+      } finally {
+        setConfigLoading(false)
+      }
+    }
+    loadConfigs()
+  }, [])
+
   const appsWithMeta = useMemo<AggregatedApp[]>(() => {
     return systems.flatMap((system) =>
       system.apps.map((app) => ({
         ...app,
         icon: deriveAppIcon(app.icon, app.name),
         globalId: `${system.type}:${app.id}`,
+        systemId: system.id,
         systemName: system.name,
         systemType: system.type,
         systemStatus: system.status,
@@ -382,12 +421,122 @@ export default function Dashboard() {
     }))
   }, [])
 
-  const handleAppAction = async (systemId: string, appId: string, action: 'start' | 'stop' | 'restart') => {
+  const resetConfigForm = () => {
+    setConfigForm(emptyConfigForm)
+    setEditingConfigId(null)
+    setConfigError(null)
+  }
+
+  const refreshSystemConfigs = async () => {
+    const response = await fetch('/api/system-configs')
+    if (response.ok) {
+      const json = await response.json()
+      setSystemConfigs(json.data || [])
+    }
+  }
+
+  const handleConfigSubmit = async () => {
+    try {
+      setConfigLoading(true)
+      setConfigError(null)
+      const payload: any = {
+        name: configForm.name,
+        host: configForm.host,
+        port: configForm.port,
+        type: configForm.type,
+        useSsl: configForm.useSsl,
+        allowSelfSigned: configForm.allowSelfSigned,
+        enabled: configForm.enabled
+      }
+      if (configForm.apiKey) {
+        payload.apiKey = configForm.apiKey
+      }
+      if (!configForm.apiKey && !editingConfigId) {
+        setConfigError('API key is required for new systems.')
+        setConfigLoading(false)
+        return
+      }
+
+      const url = editingConfigId
+        ? `/api/system-configs/${editingConfigId}`
+        : '/api/system-configs'
+      const method = editingConfigId ? 'PUT' : 'POST'
+
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+
+      if (!response.ok) {
+        throw new Error('Request failed')
+      }
+
+      await refreshSystemConfigs()
+      resetConfigForm()
+    } catch (err) {
+      console.error(err)
+      setConfigError('Failed to save system')
+    } finally {
+      setConfigLoading(false)
+    }
+  }
+
+  const handleEditConfig = (config: StoredSystemConfig) => {
+    setEditingConfigId(config.id)
+    setConfigForm({
+      id: config.id,
+      name: config.name,
+      host: config.host,
+      port: config.port,
+      type: config.type,
+      apiKey: '',
+      useSsl: config.useSsl,
+      allowSelfSigned: config.allowSelfSigned,
+      enabled: config.enabled
+    })
+  }
+
+  const handleDeleteConfig = async (id: string) => {
+    if (!confirm('Delete this system configuration?')) return
+    try {
+      await fetch(`/api/system-configs/${id}`, { method: 'DELETE' })
+      await refreshSystemConfigs()
+    } catch (err) {
+      console.error(err)
+      setConfigError('Failed to delete system')
+    }
+  }
+
+  const handleToggleConfigEnabled = async (config: StoredSystemConfig, value: boolean) => {
+    try {
+      await fetch(`/api/system-configs/${config.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: value })
+      })
+      await refreshSystemConfigs()
+    } catch (err) {
+      console.error(err)
+      setConfigError('Failed to update system')
+    }
+  }
+
+  const handleAppAction = async (
+    system: { id?: string; type: 'truenas' | 'unraid' },
+    appId: string,
+    action: 'start' | 'stop' | 'restart'
+  ) => {
     try {
       const response = await fetch('/api/apps/action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ systemId, appId, action })
+        body: JSON.stringify({
+          systemId: system.id,
+          systemType: system.type,
+          appId,
+          action
+        })
       })
       
       const data = await response.json()
@@ -447,215 +596,204 @@ export default function Dashboard() {
                     Settings
                   </DialogTrigger>
                 </Button>
-                <DialogContent className="max-w-2xl">
-                  <DialogHeader>
-                    <DialogTitle>Dashboard Settings</DialogTitle>
-                    <DialogDescription>
-                      Configure your system connections and dashboard preferences.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-6">
-                    {/* Configuration Status */}
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-medium">Configuration Status</h3>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="p-4 border rounded-lg">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="font-medium">TrueNAS</span>
-                            <Badge variant={config.truenas.apiKey ? "default" : "destructive"}>
-                              {config.truenas.apiKey ? "Configured" : "Not Configured"}
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-muted-foreground">
-                            {config.truenas.apiKey ? 
-                              `Connected to ${config.truenas.host}:${config.truenas.port}` : 
-                              "API key required for real data"
+              <DialogContent className="max-w-3xl">
+                <DialogHeader>
+                  <DialogTitle>Dashboard Settings</DialogTitle>
+                  <DialogDescription>
+                    Manage monitored systems and tweak dashboard preferences.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-6">
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="text-lg font-semibold">Connected Systems</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Add TrueNAS or Unraid servers. API keys are stored encrypted in SQLite.
+                      </p>
+                    </div>
+                    {configError && (
+                      <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                        {configError}
+                      </div>
+                    )}
+                    <div className="max-h-60 space-y-3 overflow-y-auto pr-1">
+                      {configLoading ? (
+                        <p className="text-sm text-muted-foreground">Loading systems...</p>
+                      ) : systemConfigs.length === 0 ? (
+                        <p className="text-sm text-muted-foreground">No systems configured yet.</p>
+                      ) : (
+                        systemConfigs.map((system) => (
+                          <Card key={system.id}>
+                            <CardContent className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between">
+                              <div>
+                                <p className="font-medium">{system.name}</p>
+                                <p className="text-sm text-muted-foreground">
+                                  {system.host}:{system.port}
+                                </p>
+                              </div>
+                              <Badge variant="secondary" className="capitalize">
+                                {system.type}
+                              </Badge>
+                              <div className="flex items-center gap-2">
+                                <Switch
+                                  checked={system.enabled}
+                                  onCheckedChange={(checked) => handleToggleConfigEnabled(system, checked)}
+                                />
+                                <span className="text-sm text-muted-foreground">
+                                  {system.enabled ? 'Enabled' : 'Disabled'}
+                                </span>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button variant="outline" size="sm" onClick={() => handleEditConfig(system)}>
+                                  Edit
+                                </Button>
+                                <Button variant="destructive" size="sm" onClick={() => handleDeleteConfig(system.id)}>
+                                  Delete
+                                </Button>
+                              </div>
+                            </CardContent>
+                          </Card>
+                        ))
+                      )}
+                    </div>
+                    <Separator />
+                    <div className="space-y-3">
+                      <h4 className="text-base font-medium">
+                        {editingConfigId ? 'Edit System' : 'Add System'}
+                      </h4>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label>Name</Label>
+                          <Input
+                            value={configForm.name}
+                            onChange={(e) => setConfigForm((prev) => ({ ...prev, name: e.target.value }))}
+                            placeholder="My TrueNAS"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Platform</Label>
+                          <Select
+                            value={configForm.type}
+                            onValueChange={(value: 'truenas' | 'unraid') =>
+                              setConfigForm((prev) => ({ ...prev, type: value }))
                             }
-                          </p>
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Select platform" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="truenas">TrueNAS</SelectItem>
+                              <SelectItem value="unraid">Unraid</SelectItem>
+                            </SelectContent>
+                          </Select>
                         </div>
-                        <div className="p-4 border rounded-lg">
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="font-medium">Unraid</span>
-                            <Badge variant={config.unraid.apiKey ? "default" : "destructive"}>
-                              {config.unraid.apiKey ? "Configured" : "Not Configured"}
-                            </Badge>
-                          </div>
-                          <p className="text-sm text-muted-foreground">
-                            {config.unraid.apiKey ? 
-                              `Connected to ${config.unraid.host}:${config.unraid.port}` : 
-                              "API key required for real data"
+                        <div className="space-y-2">
+                          <Label>Host/IP</Label>
+                          <Input
+                            value={configForm.host}
+                            onChange={(e) => setConfigForm((prev) => ({ ...prev, host: e.target.value }))}
+                            placeholder="192.168.1.24"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Port</Label>
+                          <Input
+                            type="number"
+                            value={configForm.port}
+                            onChange={(e) => setConfigForm((prev) => ({ ...prev, port: Number(e.target.value) }))}
+                          />
+                        </div>
+                        <div className="space-y-2 md:col-span-2">
+                          <Label>API Key</Label>
+                          <Input
+                            type="password"
+                            value={configForm.apiKey}
+                            onChange={(e) => setConfigForm((prev) => ({ ...prev, apiKey: e.target.value }))}
+                            placeholder={editingConfigId ? 'Leave blank to keep existing key' : 'Required'}
+                          />
+                        </div>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-3">
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={configForm.useSsl}
+                            onCheckedChange={(checked) => setConfigForm((prev) => ({ ...prev, useSsl: checked }))}
+                          />
+                          <Label>Use HTTPS</Label>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={configForm.allowSelfSigned}
+                            onCheckedChange={(checked) =>
+                              setConfigForm((prev) => ({ ...prev, allowSelfSigned: checked }))
                             }
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <Separator />
-                    {/* TrueNAS Settings */}
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-medium">TrueNAS Configuration</h3>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="truenas-host">Host/IP Address</Label>
-                          <Input
-                            id="truenas-host"
-                            value={config.truenas.host}
-                            onChange={(e) => setConfig(prev => ({
-                              ...prev,
-                              truenas: { ...prev.truenas, host: e.target.value }
-                            }))}
-                            placeholder="192.168.1.100"
                           />
+                          <Label>Allow self-signed</Label>
                         </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="truenas-port">Port</Label>
-                          <Input
-                            id="truenas-port"
-                            type="number"
-                            value={config.truenas.port}
-                            onChange={(e) => setConfig(prev => ({
-                              ...prev,
-                              truenas: { ...prev.truenas, port: parseInt(e.target.value) }
-                            }))}
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={configForm.enabled}
+                            onCheckedChange={(checked) => setConfigForm((prev) => ({ ...prev, enabled: checked }))}
                           />
+                          <Label>Enabled</Label>
                         </div>
                       </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="truenas-key">API Key</Label>
-                        <Input
-                          id="truenas-key"
-                          type="password"
-                          value={config.truenas.apiKey}
-                          onChange={(e) => setConfig(prev => ({
-                            ...prev,
-                            truenas: { ...prev.truenas, apiKey: e.target.value }
-                          }))}
-                          placeholder="Enter your TrueNAS API key"
-                        />
+                      <div className="flex justify-end gap-2">
+                        {editingConfigId && (
+                          <Button variant="outline" onClick={resetConfigForm}>
+                            Cancel
+                          </Button>
+                        )}
+                        <Button onClick={handleConfigSubmit} disabled={configLoading}>
+                          {editingConfigId ? 'Save Changes' : 'Add System'}
+                        </Button>
                       </div>
-                      <div className="flex items-center space-x-2">
-                        <Switch
-                          id="truenas-enabled"
-                          checked={config.truenas.enabled}
-                          onCheckedChange={(checked) => setConfig(prev => ({
-                            ...prev,
-                            truenas: { ...prev.truenas, enabled: checked }
-                          }))}
-                        />
-                        <Label htmlFor="truenas-enabled">Enable TrueNAS monitoring</Label>
-                      </div>
-                    </div>
-
-                    <Separator />
-
-                    {/* Unraid Settings */}
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-medium">Unraid Configuration</h3>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label htmlFor="unraid-host">Host/IP Address</Label>
-                          <Input
-                            id="unraid-host"
-                            value={config.unraid.host}
-                            onChange={(e) => setConfig(prev => ({
-                              ...prev,
-                              unraid: { ...prev.unraid, host: e.target.value }
-                            }))}
-                            placeholder="192.168.1.200"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="unraid-port">Port</Label>
-                          <Input
-                            id="unraid-port"
-                            type="number"
-                            value={config.unraid.port}
-                            onChange={(e) => setConfig(prev => ({
-                              ...prev,
-                              unraid: { ...prev.unraid, port: parseInt(e.target.value) }
-                            }))}
-                          />
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="unraid-key">API Key</Label>
-                        <Input
-                          id="unraid-key"
-                          type="password"
-                          value={config.unraid.apiKey}
-                          onChange={(e) => setConfig(prev => ({
-                            ...prev,
-                            unraid: { ...prev.unraid, apiKey: e.target.value }
-                          }))}
-                          placeholder="Enter your Unraid API key"
-                        />
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <Switch
-                          id="unraid-enabled"
-                          checked={config.unraid.enabled}
-                          onCheckedChange={(checked) => setConfig(prev => ({
-                            ...prev,
-                            unraid: { ...prev.unraid, enabled: checked }
-                          }))}
-                        />
-                        <Label htmlFor="unraid-enabled">Enable Unraid monitoring</Label>
-                      </div>
-                    </div>
-
-                    <Separator />
-
-                    {/* Dashboard Settings */}
-                    <div className="space-y-4">
-                      <h3 className="text-lg font-medium">Dashboard Preferences</h3>
-                      <div className="space-y-2">
-                        <Label htmlFor="refresh-interval">Refresh Interval</Label>
-                        <Select
-                          value={config.refreshInterval.toString()}
-                          onValueChange={(value) => setConfig(prev => ({
-                            ...prev,
-                            refreshInterval: parseInt(value)
-                          }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="1000">1 second</SelectItem>
-                            <SelectItem value="5000">5 seconds</SelectItem>
-                            <SelectItem value="10000">10 seconds</SelectItem>
-                            <SelectItem value="30000">30 seconds</SelectItem>
-                            <SelectItem value="60000">1 minute</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <Switch
-                          id="notifications"
-                          checked={config.notifications}
-                          onCheckedChange={(checked) => setConfig(prev => ({
-                            ...prev,
-                            notifications: checked
-                          }))}
-                        />
-                        <Label htmlFor="notifications">Enable notifications</Label>
-                      </div>
-                    </div>
-
-                    <div className="flex justify-end space-x-2">
-                      <Button variant="outline" onClick={() => setSettingsOpen(false)}>
-                        Cancel
-                      </Button>
-                      <Button onClick={() => {
-                        // Save settings logic here
-                        console.log('Saving config:', config)
-                        setSettingsOpen(false)
-                      }}>
-                        Save Settings
-                      </Button>
                     </div>
                   </div>
-                </DialogContent>
+
+                  <Separator />
+
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-medium">Dashboard Preferences</h3>
+                    <div className="space-y-2">
+                      <Label htmlFor="refresh-interval">Refresh Interval</Label>
+                      <Select
+                        value={config.refreshInterval.toString()}
+                        onValueChange={(value) =>
+                          setConfig((prev) => ({
+                            ...prev,
+                            refreshInterval: parseInt(value)
+                          }))
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="1000">1 second</SelectItem>
+                          <SelectItem value="5000">5 seconds</SelectItem>
+                          <SelectItem value="10000">10 seconds</SelectItem>
+                          <SelectItem value="30000">30 seconds</SelectItem>
+                          <SelectItem value="60000">1 minute</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        id="notifications"
+                        checked={config.notifications}
+                        onCheckedChange={(checked) =>
+                          setConfig((prev) => ({
+                            ...prev,
+                            notifications: checked
+                          }))
+                        }
+                      />
+                      <Label htmlFor="notifications">Enable notifications</Label>
+                    </div>
+                  </div>
+                </div>
+              </DialogContent>
               </Dialog>
             </div>
           </div>
@@ -754,7 +892,9 @@ export default function Dashboard() {
                       key={app.globalId}
                       app={app}
                       minWidth={cardMinWidth}
-                      onAction={(action) => handleAppAction(app.systemName, app.id, action)}
+                      onAction={(action) =>
+                        handleAppAction({ id: app.systemId, type: app.systemType }, app.id, action)
+                      }
                     />
                   ))}
                 </div>

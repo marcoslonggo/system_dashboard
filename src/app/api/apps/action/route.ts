@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { SystemAPIClient } from '@/lib/api-clients'
+import { prisma } from '@/lib/db'
+import { decryptSensitive } from '@/lib/encryption'
 
 interface AppActionRequest {
-  systemId: string
+  systemId?: string
+  systemType?: 'truenas' | 'unraid'
   appId: string
   action: 'start' | 'stop' | 'restart'
 }
 
-// Configuration storage (in production, this should be in a database)
-const systemConfigs = {
+const fallbackConfigs = {
   truenas: {
     host: process.env.TRUENAS_HOST || '192.168.1.100',
     apiKey: process.env.TRUENAS_API_KEY || '',
@@ -30,12 +32,11 @@ const systemConfigs = {
 export async function POST(request: NextRequest) {
   try {
     const body: AppActionRequest = await request.json()
-    const { systemId, appId, action } = body
+    const { systemId, systemType, appId, action } = body
 
-    // Validate request
-    if (!systemId || !appId || !action) {
+    if (!appId || !action) {
       return NextResponse.json(
-        { error: 'Missing required fields: systemId, appId, action' },
+        { error: 'Missing required fields: appId, action' },
         { status: 400 }
       )
     }
@@ -47,106 +48,135 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    let resolvedType = systemType || ''
     let success = false
-    let systemType = ''
-    let error = null
-
+    let error: string | null = null
     const apiClient = new SystemAPIClient()
 
-    // Determine system type and execute appropriate command
-    if (systemId.toLowerCase().includes('truenas')) {
-      systemType = 'truenas'
-      
-      if (!systemConfigs.truenas.enabled) {
+    const storedConfig = systemId
+      ? await prisma.systemConfig.findUnique({ where: { id: systemId } })
+      : null
+
+    if (storedConfig) {
+      if (!storedConfig.enabled) {
         return NextResponse.json(
-          { error: 'TrueNAS monitoring is disabled' },
+          { error: `${storedConfig.name} is disabled` },
           { status: 400 }
         )
       }
-      
-      if (!systemConfigs.truenas.apiKey) {
-        return NextResponse.json(
-          { error: 'TrueNAS API key required. Configure it in settings or environment variables.' },
-          { status: 400 }
-        )
-      }
-      
+
+      resolvedType = storedConfig.type
+
       try {
-        apiClient.initializeTrueNAS(
-          systemConfigs.truenas.host,
-          systemConfigs.truenas.apiKey,
-          systemConfigs.truenas.port,
-          systemConfigs.truenas.useSsl,
-          systemConfigs.truenas.allowSelfSigned
-        )
-        
-        success = await apiClient.executeTrueNASAction(appId, action)
-        console.log(`Successfully executed ${action} on TrueNAS app ${appId}`)
+        const apiKey = decryptSensitive(storedConfig.apiKeyEncrypted)
+        if (storedConfig.type === 'truenas') {
+          apiClient.initializeTrueNAS(
+            storedConfig.host,
+            apiKey,
+            storedConfig.port,
+            storedConfig.useSsl,
+            storedConfig.allowSelfSigned
+          )
+          success = await apiClient.executeTrueNASAction(appId, action)
+        } else {
+          apiClient.initializeUnraid(
+            storedConfig.host,
+            apiKey,
+            storedConfig.port,
+            storedConfig.useSsl,
+            storedConfig.allowSelfSigned
+          )
+          success = await apiClient.executeUnraidAction(appId, action)
+        }
       } catch (apiError) {
-        console.error(`TrueNAS API error for ${action} ${appId}:`, apiError)
-        error = apiError instanceof Error ? apiError.message : 'Unknown TrueNAS API error'
-      }
-    } else if (systemId.toLowerCase().includes('unraid')) {
-      systemType = 'unraid'
-      
-      if (!systemConfigs.unraid.enabled) {
-        return NextResponse.json(
-          { error: 'Unraid monitoring is disabled' },
-          { status: 400 }
-        )
-      }
-      
-      if (!systemConfigs.unraid.apiKey) {
-        return NextResponse.json(
-          { error: 'Unraid API key required. Configure it in settings or environment variables.' },
-          { status: 400 }
-        )
-      }
-      
-      try {
-        apiClient.initializeUnraid(
-          systemConfigs.unraid.host,
-          systemConfigs.unraid.apiKey,
-          systemConfigs.unraid.port,
-          systemConfigs.unraid.useSsl,
-          systemConfigs.unraid.allowSelfSigned
-        )
-        
-        success = await apiClient.executeUnraidAction(appId, action)
-        console.log(`Successfully executed ${action} on Unraid app ${appId}`)
-      } catch (apiError) {
-        console.error(`Unraid API error for ${action} ${appId}:`, apiError)
-        error = apiError instanceof Error ? apiError.message : 'Unknown Unraid API error'
+        console.error('Stored system API error', apiError)
+        error = apiError instanceof Error ? apiError.message : 'Unknown API error'
       }
     } else {
-      return NextResponse.json(
-        { error: 'Unknown system type' },
-        { status: 400 }
-      )
+      let fallbackType: 'truenas' | 'unraid' | null = null
+      if (
+        (systemType ?? '').toLowerCase() === 'truenas' ||
+        systemId?.toLowerCase().includes('truenas')
+      ) {
+        fallbackType = 'truenas'
+      } else if (
+        (systemType ?? '').toLowerCase() === 'unraid' ||
+        systemId?.toLowerCase().includes('unraid')
+      ) {
+        fallbackType = 'unraid'
+      }
+
+      if (!fallbackType) {
+        return NextResponse.json(
+          { error: 'Unknown system. Please add it in settings.' },
+          { status: 400 }
+        )
+      }
+
+      const fallback = fallbackConfigs[fallbackType]
+      if (!fallback.enabled) {
+        return NextResponse.json(
+          { error: `${fallbackType} monitoring is disabled` },
+          { status: 400 }
+        )
+      }
+
+      if (!fallback.apiKey) {
+        return NextResponse.json(
+          { error: `${fallbackType} API key required. Configure it in settings or environment variables.` },
+          { status: 400 }
+        )
+      }
+
+      resolvedType = fallbackType
+
+      try {
+        if (fallbackType === 'truenas') {
+          apiClient.initializeTrueNAS(
+            fallback.host,
+            fallback.apiKey,
+            fallback.port,
+            fallback.useSsl,
+            fallback.allowSelfSigned
+          )
+          success = await apiClient.executeTrueNASAction(appId, action)
+        } else {
+          apiClient.initializeUnraid(
+            fallback.host,
+            fallback.apiKey,
+            fallback.port,
+            fallback.useSsl,
+            fallback.allowSelfSigned
+          )
+          success = await apiClient.executeUnraidAction(appId, action)
+        }
+      } catch (apiError) {
+        console.error('Fallback system API error', apiError)
+        error = apiError instanceof Error ? apiError.message : 'Unknown API error'
+      }
     }
 
     if (success) {
       return NextResponse.json({
         success: true,
-        message: `Successfully ${action}ed ${appId} on ${systemId}`,
-        systemType,
+        message: `Successfully ${action}ed ${appId}`,
+        systemType: resolvedType,
         appId,
         action,
         timestamp: new Date().toISOString()
       })
-    } else {
-      return NextResponse.json(
-        { 
-          error: error || `Failed to ${action} ${appId} on ${systemId}`,
-          systemType,
-          appId,
-          action,
-          timestamp: new Date().toISOString()
-        },
-        { status: 500 }
-      )
     }
 
+    return NextResponse.json(
+      { 
+        error: error || `Failed to ${action} ${appId}`,
+        systemType: resolvedType,
+        appId,
+        action,
+        timestamp: new Date().toISOString()
+      },
+      { status: 500 }
+    )
   } catch (error) {
     console.error('App action error:', error)
     return NextResponse.json(
