@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { promises as fs } from 'fs'
 import path from 'path'
+import { prisma } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
@@ -166,6 +167,19 @@ export async function GET(
     if (!sanitized) {
       const fallback = await fs.readFile(DEFAULT_ICON_PATH)
       return iconResponse(fallback)
+    }
+
+    const override = await prisma.appIconOverride.findUnique({ where: { slug: sanitized } })
+    if (override) {
+      const overrideSlug = override.iconSlug
+      const localOverride = await readLocalIcon(overrideSlug)
+      if (localOverride) {
+        return iconResponse(localOverride.buffer, localOverride.contentType)
+      }
+      const remoteOverride = await fetchRemoteIcon(overrideSlug)
+      if (remoteOverride) {
+        return iconResponse(remoteOverride)
+      }
     }
 
     const candidates = buildCandidates(sanitized)

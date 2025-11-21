@@ -34,7 +34,9 @@ import {
   Clock,
   Thermometer,
   GripVertical,
-  ChevronDown
+  ChevronDown,
+  Image as ImageIcon,
+  X
 } from 'lucide-react'
 import { validateHost, validatePort } from '@/lib/system-config-validation'
 
@@ -251,6 +253,10 @@ export default function Dashboard() {
     message?: string
     signature?: string
   }>({ status: 'idle' })
+  const [iconOverrides, setIconOverrides] = useState<Record<string, string>>({})
+  const [iconCatalog, setIconCatalog] = useState<{ slug: string; url: string }[]>([])
+  const [iconPickerTarget, setIconPickerTarget] = useState<AggregatedApp | null>(null)
+  const [iconSearch, setIconSearch] = useState('')
   const prefsHydratedRef = useRef(false)
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -344,6 +350,7 @@ export default function Dashboard() {
     return systems.flatMap((system) =>
       system.apps.map((app) => ({
         ...app,
+        slug: app.slug || slugifyName(app.name),
         ...(() => {
           const iconData = deriveAppIcon(app.icon, app.slug, app.name)
           return {
@@ -377,6 +384,11 @@ export default function Dashboard() {
       connectionTest.signature === currentSignature,
     [connectionTest.status, connectionTest.signature, currentSignature]
   )
+  const filteredIcons = useMemo(() => {
+    const term = iconSearch.toLowerCase().trim()
+    if (!term) return iconCatalog.slice(0, 200)
+    return iconCatalog.filter((icon) => icon.slug.includes(term)).slice(0, 200)
+  }, [iconCatalog, iconSearch])
 
   const currentAppIds = useMemo(() => appsWithMeta.map((app) => app.globalId), [appsWithMeta])
   const persistOrder = useCallback((order: string[]) => {
@@ -453,6 +465,21 @@ export default function Dashboard() {
     setConnectionTest({ status: 'idle' })
   }
 
+  const refreshIconOverrides = useCallback(async () => {
+    try {
+      const response = await fetch('/api/icon-overrides')
+      if (!response.ok) return
+      const json = await response.json()
+      const map: Record<string, string> = {}
+      ;(json.data || []).forEach((entry: { slug: string; iconSlug: string }) => {
+        map[entry.slug] = entry.iconSlug
+      })
+      setIconOverrides(map)
+    } catch (error) {
+      console.warn('Failed to refresh icon overrides', error)
+    }
+  }, [])
+
   const refreshSystemConfigs = useCallback(async () => {
     try {
       setConfigError(null)
@@ -474,6 +501,22 @@ export default function Dashboard() {
   useEffect(() => {
     refreshSystemConfigs()
   }, [refreshSystemConfigs])
+
+  useEffect(() => {
+    const fetchCatalog = async () => {
+      try {
+        const response = await fetch('/api/icon-catalog')
+        if (!response.ok) return
+        const json = await response.json()
+        setIconCatalog(json.data || [])
+      } catch (error) {
+        console.warn('Failed to load icon catalog', error)
+      }
+    }
+
+    refreshIconOverrides()
+    fetchCatalog()
+  }, [refreshIconOverrides])
 
   useEffect(() => {
     if (!isAddMode) return
@@ -624,6 +667,31 @@ export default function Dashboard() {
       setConfigError('Failed to update system')
     }
   }
+
+  const handleIconOverrideChange = useCallback(
+    async (targetSlug: string | undefined, iconSlug: string | null) => {
+      if (!targetSlug) return
+      try {
+        if (iconSlug) {
+          await fetch(`/api/icon-overrides/${targetSlug}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ iconSlug })
+          })
+        } else {
+          await fetch(`/api/icon-overrides/${targetSlug}`, {
+            method: 'DELETE'
+          })
+        }
+        await refreshIconOverrides()
+        await fetchSystems()
+      } catch (error) {
+        console.error('Failed to update icon override', error)
+        alert('Could not update icon override')
+      }
+    },
+    [fetchSystems, refreshIconOverrides]
+  )
 
   const handleAppAction = async (
     system: { id?: string; type: 'truenas' | 'unraid' },
@@ -1182,9 +1250,92 @@ export default function Dashboard() {
               </SortableContext>
             </DndContext>
           )}
-        </div>
       </div>
     </div>
+
+      <Dialog
+        open={!!iconPickerTarget}
+        onOpenChange={(open) => {
+          if (!open) {
+            setIconPickerTarget(null)
+            setIconSearch('')
+          }
+        }}
+      >
+        <DialogContent className="max-w-4xl">
+          <DialogHeader>
+            <DialogTitle>Choose an icon</DialogTitle>
+            <DialogDescription>
+              Select an icon from the GitHub catalog or reset to default for this container.
+            </DialogDescription>
+          </DialogHeader>
+          {iconPickerTarget?.slug ? (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium">{iconPickerTarget.name}</p>
+                  <p className="text-xs text-muted-foreground">Slug: {iconPickerTarget.slug}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Search icons..."
+                    value={iconSearch}
+                    onChange={(e) => setIconSearch(e.target.value)}
+                    className="w-64"
+                  />
+                  <Button
+                    variant="outline"
+                    onClick={() => handleIconOverrideChange(iconPickerTarget.slug, null)}
+                  >
+                    Use default
+                  </Button>
+                </div>
+              </div>
+              <div className="grid max-h-[60vh] grid-cols-3 gap-3 overflow-y-auto md:grid-cols-4 lg:grid-cols-5">
+                {filteredIcons.map((icon) => (
+                  <IconGridItem
+                    key={icon.slug}
+                    icon={icon}
+                    selected={iconOverrides[iconPickerTarget.slug] === icon.slug}
+                    onSelect={(slug) => handleIconOverrideChange(iconPickerTarget.slug, slug)}
+                  />
+                ))}
+                {filteredIcons.length === 0 && (
+                  <p className="col-span-full text-sm text-muted-foreground">No icons match your search.</p>
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Select an application to customize its icon.</p>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+function IconGridItem({
+  icon,
+  selected,
+  onSelect
+}: {
+  icon: { slug: string; url: string }
+  selected: boolean
+  onSelect: (slug: string) => void
+}) {
+  return (
+    <button
+      onClick={() => onSelect(icon.slug)}
+      className={cn(
+        'flex flex-col items-center gap-2 rounded-md border bg-card p-3 text-xs capitalize transition hover:border-primary',
+        selected && 'border-primary ring-1 ring-primary'
+      )}
+    >
+      <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-md border bg-white">
+        <img src={icon.url} alt={icon.slug} className="h-full w-full object-contain" />
+      </div>
+      <span className="truncate w-20">{icon.slug}</span>
+    </button>
   )
 }
 
@@ -1223,7 +1374,20 @@ function SortableAppCard({ app, onAction, minWidth }: SortableAppCardProps) {
               <HostIcon className="h-3 w-3" />
               {meta.label}
             </Badge>
-            <GripVertical className="h-4 w-4 text-muted-foreground" />
+            <div className="flex items-center gap-1">
+              {app.slug && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 text-muted-foreground"
+                  onClick={() => setIconPickerTarget(app)}
+                  title="Customize icon"
+                >
+                  <ImageIcon className="h-3.5 w-3.5" />
+                </Button>
+              )}
+              <GripVertical className="h-4 w-4 text-muted-foreground" />
+            </div>
           </div>
           <CardTitle className="text-base">{app.name}</CardTitle>
           <CardDescription className="flex items-center gap-2 text-sm">

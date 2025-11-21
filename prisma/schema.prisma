@@ -45,6 +45,13 @@ model SystemConfig {
   updatedAt        DateTime   @updatedAt
 }
 
+model AppIconOverride {
+  slug      String   @id
+  iconSlug  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 enum SystemType {
   truenas
   unraid
