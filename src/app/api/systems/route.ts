@@ -25,6 +25,7 @@ interface App {
   memory: number | null
   icon?: string
   url?: string
+  slug?: string
 }
 
 export async function GET(request: NextRequest) {

@@ -1,5 +1,6 @@
 import axios, { AxiosError, AxiosInstance } from 'axios'
 import https from 'https'
+import { slugify } from './slugify'
 
 // TrueNAS API Client
 export class TrueNASClient {
@@ -118,6 +119,7 @@ export class TrueNASClient {
         const name = container.name || container.Names?.[0]?.replace('/', '') || `Container ${index + 1}`
         const status = container.state === 'running' ? 'running' : 
                       container.state === 'stopped' ? 'stopped' : 'error'
+        const slug = slugify(container.name || container.Names?.[0] || name)
         
         apps.push({
           id: container.id || `docker-${index}`,
@@ -125,7 +127,8 @@ export class TrueNASClient {
           status,
           cpu: null,
           memory: null,
-          url: this.getLegacyContainerUrl(container)
+          url: this.getLegacyContainerUrl(container),
+          slug
         })
       })
 
@@ -136,7 +139,8 @@ export class TrueNASClient {
           status: jail.state === 'up' ? 'running' : 'stopped',
           cpu: null,
           memory: null,
-          url: jail.ip ? `http://${jail.ip}` : undefined
+          url: jail.ip ? `http://${jail.ip}` : undefined,
+          slug: slugify(jail.name)
         })
       })
 
@@ -176,6 +180,8 @@ export class TrueNASClient {
     const state = (app.state || '').toString().toLowerCase()
     const status = state === 'running' ? 'running' : state === 'stopped' ? 'stopped' : 'error'
     const url = this.getPortalUrl(app) || this.getWorkloadPortUrl(app)
+    const slugSource = app.metadata?.name || app.chart_metadata?.chart_name || app.name
+    const slug = slugify(slugSource || name)
 
     return {
       id,
@@ -184,7 +190,8 @@ export class TrueNASClient {
       cpu: null,
       memory: null,
       url,
-      icon: typeof app.metadata?.icon === 'string' ? app.metadata.icon : undefined
+      icon: typeof app.metadata?.icon === 'string' ? app.metadata.icon : undefined,
+      slug
     }
   }
 
@@ -489,6 +496,7 @@ export class UnraidClient {
         : container.state === 'EXITED'
           ? 'stopped'
           : 'error'
+      const slug = slugify(name || container.id)
 
       return {
         id: container.id,
@@ -496,7 +504,8 @@ export class UnraidClient {
         status,
         cpu: null,
         memory: null,
-        url: this.getContainerUrl(container.ports)
+        url: this.getContainerUrl(container.ports),
+        slug
       }
     })
   }

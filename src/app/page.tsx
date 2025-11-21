@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
+import { slugify as sharedSlugify } from '@/lib/slugify'
 import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { 
@@ -59,6 +60,7 @@ interface App {
   memory: number | null
   icon?: string
   url?: string
+  slug?: string
 }
 
 interface AggregatedApp extends App {
@@ -128,23 +130,17 @@ const arraysEqual = (a: string[], b: string[]) => {
   return true
 }
 
-const slugifyName = (name?: string) => {
-  if (!name) return ''
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
+const slugifyName = (name?: string) => sharedSlugify(name)
 
-const deriveAppIcon = (provided?: string, name?: string) => {
-  const slug = slugifyName(name)
-  const slugIcon = slug ? `/api/icons/${slug}` : DOCKER_ICON_FALLBACK
+const deriveAppIcon = (provided?: string, slug?: string, name?: string) => {
+  const finalSlug = slug || slugifyName(name)
+  const slugIcon = finalSlug ? `/api/icons/${finalSlug}` : DOCKER_ICON_FALLBACK
 
   if (provided && provided.length > 0) {
     return { primary: provided, fallback: slugIcon }
   }
 
-  if (slug) {
+  if (finalSlug) {
     return { primary: slugIcon, fallback: DOCKER_ICON_FALLBACK }
   }
 
@@ -349,7 +345,7 @@ export default function Dashboard() {
       system.apps.map((app) => ({
         ...app,
         ...(() => {
-          const iconData = deriveAppIcon(app.icon, app.name)
+          const iconData = deriveAppIcon(app.icon, app.slug, app.name)
           return {
             icon: iconData.primary,
             fallbackIcon: iconData.fallback
