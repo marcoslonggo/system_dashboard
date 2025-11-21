@@ -1,16 +1,21 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { DndContext, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
+import { SortableContext, arrayMove, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { cn } from '@/lib/utils'
+import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { 
   Server, 
@@ -25,13 +30,10 @@ import {
   Wifi,
   WifiOff,
   Database,
-  Container,
-  Network,
-  AlertTriangle,
-  CheckCircle,
   Clock,
   Thermometer,
-  Droplets
+  GripVertical,
+  ChevronDown
 } from 'lucide-react'
 
 interface SystemInfo {
@@ -43,6 +45,7 @@ interface SystemInfo {
   memory: number
   storage: number
   temperature: number
+  gpu?: number | null
   apps: App[]
 }
 
@@ -50,10 +53,19 @@ interface App {
   id: string
   name: string
   status: 'running' | 'stopped' | 'error'
-  cpu: number
-  memory: number
+  cpu: number | null
+  memory: number | null
   icon?: string
   url?: string
+}
+
+interface AggregatedApp extends App {
+  globalId: string
+  systemName: string
+  systemType: 'truenas' | 'unraid'
+  systemStatus: SystemInfo['status']
+  hostCpu: number
+  hostMemory: number
 }
 
 interface SystemConfig {
@@ -73,6 +85,84 @@ interface SystemConfig {
   notifications: boolean
 }
 
+const APP_ORDER_STORAGE_KEY = 'dashboard-app-order'
+const CARD_WIDTH_STORAGE_KEY = 'dashboard-card-width'
+const DEFAULT_CARD_WIDTH = 320
+const DOCKER_ICON_FALLBACK = '/docker-icon.svg'
+
+const SYSTEM_META: Record<SystemInfo['type'], { label: string; badgeClass: string; icon: typeof HardDrive }> = {
+  truenas: {
+    label: 'TrueNAS',
+    badgeClass: 'bg-sky-100 text-sky-900',
+    icon: HardDrive
+  },
+  unraid: {
+    label: 'Unraid',
+    badgeClass: 'bg-amber-100 text-amber-900',
+    icon: Server
+  }
+}
+
+const arraysEqual = (a: string[], b: string[]) => {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
+const deriveAppIcon = (provided?: string, name?: string) => {
+  if (provided && provided.length > 0) {
+    return provided
+  }
+  if (!name) {
+    return DOCKER_ICON_FALLBACK
+  }
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  if (!slug) {
+    return DOCKER_ICON_FALLBACK
+  }
+  return `https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/${slug}.svg`
+}
+
+const getStatusColor = (status: string) => {
+  switch (status) {
+    case 'online':
+    case 'running':
+      return 'bg-green-500'
+    case 'offline':
+    case 'stopped':
+      return 'bg-red-500'
+    case 'warning':
+    case 'error':
+      return 'bg-yellow-500'
+    default:
+      return 'bg-gray-500'
+  }
+}
+
+const getStatusBadge = (status: string, uptime?: string) => {
+  switch (status) {
+    case 'online':
+    case 'running':
+      return <Badge variant="default" className="bg-green-100 text-green-800">Online</Badge>
+    case 'offline':
+    case 'stopped':
+      if (uptime === 'API key required') {
+        return <Badge variant="destructive">API Key Required</Badge>
+      }
+      return <Badge variant="destructive">Offline</Badge>
+    case 'warning':
+    case 'error':
+      return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">Warning</Badge>
+    default:
+      return <Badge variant="outline">Unknown</Badge>
+  }
+}
+
 export default function Dashboard() {
   const [systems, setSystems] = useState<SystemInfo[]>([
     {
@@ -84,6 +174,7 @@ export default function Dashboard() {
       memory: 60,
       storage: 45,
       temperature: 42,
+      gpu: null,
       apps: [
         { id: '1', name: 'Plex Media Server', status: 'running', cpu: 15, memory: 2048, url: 'http://192.168.1.100:32400' },
         { id: '2', name: 'Home Assistant', status: 'running', cpu: 8, memory: 512, url: 'http://192.168.1.100:8123' },
@@ -100,6 +191,7 @@ export default function Dashboard() {
       memory: 75,
       storage: 68,
       temperature: 38,
+      gpu: null,
       apps: [
         { id: '5', name: 'AdGuard Home', status: 'running', cpu: 2, memory: 256, url: 'http://192.168.1.200:80' },
         { id: '6', name: 'Pi-hole', status: 'running', cpu: 1, memory: 128, url: 'http://192.168.1.200:80/admin' },
@@ -110,9 +202,11 @@ export default function Dashboard() {
   ])
 
   const [autoRefresh, setAutoRefresh] = useState(true)
-  const [selectedSystem, setSelectedSystem] = useState<string>('all')
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [systemDetailsOpen, setSystemDetailsOpen] = useState<Record<string, boolean>>({})
+  const [cardMinWidth, setCardMinWidth] = useState(DEFAULT_CARD_WIDTH)
+  const [appOrder, setAppOrder] = useState<string[]>([])
   const [config, setConfig] = useState<SystemConfig>({
     truenas: {
       host: '192.168.1.100',
@@ -129,6 +223,39 @@ export default function Dashboard() {
     refreshInterval: 5000,
     notifications: true
   })
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8
+      }
+    })
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const stored = window.localStorage.getItem(APP_ORDER_STORAGE_KEY)
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored)
+        if (Array.isArray(parsed)) {
+          setAppOrder(parsed)
+        }
+      } catch {
+        // ignore malformed storage
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const stored = window.localStorage.getItem(CARD_WIDTH_STORAGE_KEY)
+    if (stored) {
+      const parsed = Number(stored)
+      if (!Number.isNaN(parsed) && parsed >= 220 && parsed <= 480) {
+        setCardMinWidth(parsed)
+      }
+    }
+  }, [])
 
   // Auto-refresh effect
   useEffect(() => {
@@ -172,40 +299,88 @@ export default function Dashboard() {
     fetchInitialData()
   }, [])
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'online':
-      case 'running':
-        return 'bg-green-500'
-      case 'offline':
-      case 'stopped':
-        return 'bg-red-500'
-      case 'warning':
-      case 'error':
-        return 'bg-yellow-500'
-      default:
-        return 'bg-gray-500'
-    }
-  }
+  const appsWithMeta = useMemo<AggregatedApp[]>(() => {
+    return systems.flatMap((system) =>
+      system.apps.map((app) => ({
+        ...app,
+        icon: deriveAppIcon(app.icon, app.name),
+        globalId: `${system.type}:${app.id}`,
+        systemName: system.name,
+        systemType: system.type,
+        systemStatus: system.status,
+        hostCpu: system.cpu,
+        hostMemory: system.memory
+      }))
+    )
+  }, [systems])
 
-  const getStatusBadge = (status: string, uptime?: string) => {
-    switch (status) {
-      case 'online':
-      case 'running':
-        return <Badge variant="default" className="bg-green-100 text-green-800">Online</Badge>
-      case 'offline':
-      case 'stopped':
-        if (uptime === 'API key required') {
-          return <Badge variant="destructive">API Key Required</Badge>
-        }
-        return <Badge variant="destructive">Offline</Badge>
-      case 'warning':
-      case 'error':
-        return <Badge variant="secondary" className="bg-yellow-100 text-yellow-800">Warning</Badge>
-      default:
-        return <Badge variant="outline">Unknown</Badge>
+  const currentAppIds = useMemo(() => appsWithMeta.map((app) => app.globalId), [appsWithMeta])
+  const persistOrder = useCallback((order: string[]) => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(APP_ORDER_STORAGE_KEY, JSON.stringify(order))
+  }, [])
+  const currentIdsSignature = currentAppIds.join('|')
+
+  useEffect(() => {
+    if (!currentAppIds.length) return
+    setAppOrder((prev) => {
+      const filtered = prev.filter((id) => currentAppIds.includes(id))
+      const missing = currentAppIds.filter((id) => !filtered.includes(id))
+      const next = [...filtered, ...missing]
+      if (arraysEqual(next, prev)) {
+        return prev
+      }
+      persistOrder(next)
+      return next
+    })
+  }, [currentIdsSignature, currentAppIds, persistOrder])
+
+  const orderedApps = useMemo(() => {
+    if (!appsWithMeta.length) return []
+    if (!appOrder.length) return appsWithMeta
+    const map = new Map(appsWithMeta.map((app) => [app.globalId, app]))
+    const ordered: AggregatedApp[] = []
+    appOrder.forEach((id) => {
+      const app = map.get(id)
+      if (app) {
+        ordered.push(app)
+        map.delete(id)
+      }
+    })
+    map.forEach((app) => ordered.push(app))
+    return ordered
+  }, [appsWithMeta, appOrder])
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event
+      if (!over || active.id === over.id) return
+      setAppOrder((prev) => {
+        const oldIndex = prev.indexOf(active.id as string)
+        const newIndex = prev.indexOf(over.id as string)
+        if (oldIndex === -1 || newIndex === -1) return prev
+        const next = arrayMove(prev, oldIndex, newIndex)
+        persistOrder(next)
+        return next
+      })
+    },
+    [persistOrder]
+  )
+
+  const handleCardWidthChange = useCallback((value: number[]) => {
+    const width = value[0]
+    setCardMinWidth(width)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(CARD_WIDTH_STORAGE_KEY, String(width))
     }
-  }
+  }, [])
+
+  const handleSystemToggle = useCallback((name: string, open: boolean) => {
+    setSystemDetailsOpen((prev) => ({
+      ...prev,
+      [name]: open
+    }))
+  }, [])
 
   const handleAppAction = async (systemId: string, appId: string, action: 'start' | 'stop' | 'restart') => {
     try {
@@ -243,10 +418,6 @@ export default function Dashboard() {
       alert('Network error: Failed to perform action')
     }
   }
-
-  const filteredSystems = selectedSystem === 'all' 
-    ? systems 
-    : systems.filter(s => s.type === selectedSystem)
 
   return (
     <div className="min-h-screen bg-background">
@@ -493,216 +664,251 @@ export default function Dashboard() {
 
       <div className="container mx-auto px-4 py-6">
         {/* System Overview */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+        <div className="mb-6 flex flex-col gap-2 md:flex-row">
           {systems.map((system) => (
-            <Card key={system.name} className="relative">
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-lg">{system.name}</CardTitle>
-                  <div className="flex items-center gap-2">
-                    <div className={`w-2 h-2 rounded-full ${getStatusColor(system.status)}`} />
-                    {getStatusBadge(system.status, system.uptime)}
-                  </div>
+            <Card key={system.name} className="flex-1 border-border/60 bg-muted/40">
+              <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-xs sm:text-sm text-muted-foreground">
+                <div className="flex items-center gap-2">
+                  <div className={`h-2 w-2 rounded-full ${getStatusColor(system.status)}`} />
+                  <span className="font-semibold text-foreground">{system.name}</span>
                 </div>
-                <CardDescription className="flex items-center gap-1">
+                <div className="flex items-center gap-2">
                   <Clock className="h-3 w-3" />
-                  {system.uptime}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-2">
-                    <Cpu className="h-4 w-4" />
-                    <span>CPU</span>
-                  </div>
-                  <span className="font-medium">{system.cpu}%</span>
+                  <span>{system.uptime}</span>
                 </div>
-                <Progress value={system.cpu} className="h-2" />
-                
-                <div className="flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-2">
-                    <MemoryStick className="h-4 w-4" />
-                    <span>Memory</span>
-                  </div>
-                  <span className="font-medium">{system.memory}%</span>
+                <div className="flex items-center gap-2">
+                  <Cpu className="h-4 w-4 text-primary" />
+                  <span>{system.cpu}% CPU</span>
                 </div>
-                <Progress value={system.memory} className="h-2" />
-                
-                <div className="flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-2">
-                    <HardDrive className="h-4 w-4" />
-                    <span>Storage</span>
-                  </div>
-                  <span className="font-medium">{system.storage}%</span>
+                <div className="flex items-center gap-2">
+                  <MemoryStick className="h-4 w-4 text-primary" />
+                  <span>{system.memory}% RAM</span>
                 </div>
-                <Progress value={system.storage} className="h-2" />
-                
-                <div className="flex items-center justify-between text-sm">
-                  <div className="flex items-center gap-2">
-                    <Thermometer className="h-4 w-4" />
-                    <span>Temperature</span>
-                  </div>
-                  <span className="font-medium">{system.temperature}°C</span>
+                <div className="flex items-center gap-2">
+                  <HardDrive className="h-4 w-4 text-primary" />
+                  <span>{system.storage}% Storage</span>
                 </div>
-              </CardContent>
+                <div className="flex items-center gap-2">
+                  <Thermometer className="h-4 w-4 text-primary" />
+                  <span>{system.temperature}°C</span>
+                </div>
+                {typeof system.gpu === 'number' && (
+                  <div className="flex items-center gap-2">
+                    <Activity className="h-4 w-4 text-primary" />
+                    <span>{system.gpu}% GPU</span>
+                  </div>
+                )}
+              </div>
             </Card>
           ))}
         </div>
 
         {/* Apps Management */}
-        <Tabs defaultValue="all" className="space-y-4">
-          <div className="flex items-center justify-between">
-            <TabsList>
-              <TabsTrigger value="all">All Apps</TabsTrigger>
-              <TabsTrigger value="truenas">TrueNAS</TabsTrigger>
-              <TabsTrigger value="unraid">Unraid</TabsTrigger>
-            </TabsList>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Activity className="h-4 w-4" />
-              Last updated: {lastUpdated.toLocaleTimeString()}
+        <div className="space-y-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="space-y-1">
+              <h2 className="text-lg font-semibold">Applications</h2>
+              <p className="text-sm text-muted-foreground">
+                Reorder cards and manage containers from a unified view.
+              </p>
+            </div>
+            <div className="flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-end">
+              <div className="flex items-center gap-2">
+                <Activity className="h-4 w-4" />
+                Last updated: {lastUpdated.toLocaleTimeString()}
+              </div>
+              <div className="flex items-center gap-3">
+                <span>Card size</span>
+                <Slider
+                  className="w-40"
+                  min={220}
+                  max={420}
+                  step={20}
+                  value={[cardMinWidth]}
+                  onValueChange={handleCardWidthChange}
+                />
+                <span className="text-muted-foreground">{cardMinWidth}px</span>
+              </div>
             </div>
           </div>
-
-          <TabsContent value="all" className="space-y-4">
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {filteredSystems.map((system) => (
-                <Card key={system.name}>
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      <Container className="h-5 w-5" />
-                      {system.name} Applications
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      {system.apps.map((app) => (
-                        <div key={app.id} className="flex items-center justify-between p-3 border rounded-lg">
-                          <div className="flex items-center gap-3">
-                            <div className={`w-3 h-3 rounded-full ${getStatusColor(app.status)}`} />
-                            <div>
-                              <p className="font-medium">{app.name}</p>
-                              <p className="text-sm text-muted-foreground">
-                                CPU: {app.cpu}% | Memory: {app.memory > 0 ? `${app.memory}MB` : 'N/A'}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {app.url && (
-                              <Button variant="outline" size="sm" asChild>
-                                <a href={app.url} target="_blank" rel="noopener noreferrer">
-                                  Open
-                                </a>
-                              </Button>
-                            )}
-                            <div className="flex gap-1">
-                              {app.status === 'running' ? (
-                                <>
-                                  <Button 
-                                    size="sm" 
-                                    variant="outline"
-                                    onClick={() => handleAppAction(system.name, app.id, 'restart')}
-                                  >
-                                    <RotateCcw className="h-3 w-3" />
-                                  </Button>
-                                  <Button 
-                                    size="sm" 
-                                    variant="destructive"
-                                    onClick={() => handleAppAction(system.name, app.id, 'stop')}
-                                  >
-                                    <PowerOff className="h-3 w-3" />
-                                  </Button>
-                                </>
-                              ) : (
-                                <Button 
-                                  size="sm" 
-                                  variant="default"
-                                  onClick={() => handleAppAction(system.name, app.id, 'start')}
-                                >
-                                  <Power className="h-3 w-3" />
-                                </Button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </TabsContent>
-
-          <TabsContent value="truenas">
+          {orderedApps.length === 0 ? (
             <Card>
-              <CardHeader>
-                <CardTitle>TrueNAS Applications</CardTitle>
-                <CardDescription>Manage your TrueNAS apps and services</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {systems.find(s => s.type === 'truenas')?.apps.map((app) => (
-                    <div key={app.id} className="flex items-center justify-between p-3 border rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-3 h-3 rounded-full ${getStatusColor(app.status)}`} />
-                        <div>
-                          <p className="font-medium">{app.name}</p>
-                          <p className="text-sm text-muted-foreground">
-                            CPU: {app.cpu}% | Memory: {app.memory > 0 ? `${app.memory}MB` : 'N/A'}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {app.url && (
-                          <Button variant="outline" size="sm" asChild>
-                            <a href={app.url} target="_blank" rel="noopener noreferrer">
-                              Open
-                            </a>
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              <CardContent className="py-12 text-center text-muted-foreground">
+                No applications detected. Configure your systems to begin monitoring.
               </CardContent>
             </Card>
-          </TabsContent>
-
-          <TabsContent value="unraid">
-            <Card>
-              <CardHeader>
-                <CardTitle>Unraid Applications</CardTitle>
-                <CardDescription>Manage your Unraid Docker containers and VMs</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  {systems.find(s => s.type === 'unraid')?.apps.map((app) => (
-                    <div key={app.id} className="flex items-center justify-between p-3 border rounded-lg">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-3 h-3 rounded-full ${getStatusColor(app.status)}`} />
-                        <div>
-                          <p className="font-medium">{app.name}</p>
-                          <p className="text-sm text-muted-foreground">
-                            CPU: {app.cpu}% | Memory: {app.memory > 0 ? `${app.memory}MB` : 'N/A'}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {app.url && (
-                          <Button variant="outline" size="sm" asChild>
-                            <a href={app.url} target="_blank" rel="noopener noreferrer">
-                              Open
-                            </a>
-                          </Button>
-                        )}
-                      </div>
-                    </div>
+          ) : (
+            <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+              <SortableContext
+                items={orderedApps.map((app) => app.globalId)}
+                strategy={rectSortingStrategy}
+              >
+                <div
+                  className="grid gap-4"
+                  style={{
+                    gridTemplateColumns: `repeat(auto-fit, minmax(${cardMinWidth}px, 1fr))`
+                  }}
+                >
+                  {orderedApps.map((app) => (
+                    <SortableAppCard
+                      key={app.globalId}
+                      app={app}
+                      minWidth={cardMinWidth}
+                      onAction={(action) => handleAppAction(app.systemName, app.id, action)}
+                    />
                   ))}
                 </div>
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
+              </SortableContext>
+            </DndContext>
+          )}
+        </div>
       </div>
+    </div>
+  )
+}
+
+type SortableAppCardProps = {
+  app: AggregatedApp
+  onAction: (action: 'start' | 'stop' | 'restart') => void
+  minWidth: number
+}
+
+function SortableAppCard({ app, onAction, minWidth }: SortableAppCardProps) {
+  const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
+    id: app.globalId
+  })
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  }
+  const meta = SYSTEM_META[app.systemType]
+  const HostIcon = meta.icon
+  const hasCpu = typeof app.cpu === 'number'
+  const hasMemory = typeof app.memory === 'number'
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ ...style, minWidth: `${minWidth}px` }}
+      className={cn('w-full', isDragging && 'cursor-grabbing opacity-90 drop-shadow-lg')}
+      {...attributes}
+      {...listeners}
+    >
+      <Card className={cn('h-full border border-border/60', isDragging && 'ring-2 ring-primary/40')}>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <Badge className={cn('flex items-center gap-1', meta.badgeClass)}>
+              <HostIcon className="h-3 w-3" />
+              {meta.label}
+            </Badge>
+            <GripVertical className="h-4 w-4 text-muted-foreground" />
+          </div>
+          <CardTitle className="text-base">{app.name}</CardTitle>
+          <CardDescription className="flex items-center gap-2 text-sm">
+            <span className={`h-2 w-2 rounded-full ${getStatusColor(app.status)}`} />
+            <span className="capitalize">{app.status}</span>
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 overflow-hidden rounded-md bg-muted p-1">
+                <img
+                  src={app.icon || DOCKER_ICON_FALLBACK}
+                  alt={`${app.name} icon`}
+                  className="h-full w-full object-contain"
+                  onError={(event) => {
+                    event.currentTarget.onerror = null
+                    event.currentTarget.src = DOCKER_ICON_FALLBACK
+                  }}
+                />
+              </div>
+              <div className="text-xs text-muted-foreground">
+                <p className="font-medium text-foreground">{app.systemName}</p>
+                <div className="flex items-center gap-1">
+                  <span className={`h-1.5 w-1.5 rounded-full ${getStatusColor(app.systemStatus)}`} />
+                  <span className="capitalize">{app.systemStatus}</span>
+                </div>
+              </div>
+            </div>
+          {(hasCpu || hasMemory) ? (
+            <div className="grid grid-cols-2 gap-3">
+              {hasCpu && (
+                <div>
+                  <div className="flex items-center justify-between text-xs uppercase text-muted-foreground">
+                    <span>CPU</span>
+                    <span>{app.cpu}%</span>
+                  </div>
+                  <Progress value={Math.min(Math.max(app.cpu ?? 0, 0), 100)} className="h-2" />
+                </div>
+              )}
+              {hasMemory && (
+                <div>
+                  <div className="flex items-center justify-between text-xs uppercase text-muted-foreground">
+                    <span>Memory</span>
+                    <span>{app.memory}%</span>
+                  </div>
+                  <Progress value={Math.min(Math.max(app.memory ?? 0, 0), 100)} className="h-2" />
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Container metrics not available from this system.
+            </p>
+          )}
+          {app.url && (
+            <a
+              href={app.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block text-xs text-muted-foreground underline underline-offset-2"
+            >
+              {app.url}
+            </a>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {app.url && (
+              <Button variant="outline" size="sm" asChild>
+                <a href={app.url} target="_blank" rel="noopener noreferrer">
+                  Open
+                </a>
+              </Button>
+            )}
+            {app.status === 'running' ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onAction('restart')}
+                  className="flex items-center gap-1"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Restart
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => onAction('stop')}
+                  className="flex items-center gap-1"
+                >
+                  <PowerOff className="h-3 w-3" />
+                  Stop
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                variant="default"
+                onClick={() => onAction('start')}
+                className="flex items-center gap-1"
+              >
+                <Power className="h-3 w-3" />
+                Start
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

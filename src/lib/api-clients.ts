@@ -76,6 +76,7 @@ export class TrueNASClient {
         memory: memoryUsage || 45,
         storage: storageUsage || 50,
         temperature: Math.round(temperature),
+        gpu: null,
         apps: await this.getApps()
       }
     } catch (error) {
@@ -122,8 +123,8 @@ export class TrueNASClient {
           id: container.id || `docker-${index}`,
           name,
           status,
-          cpu: Math.round(container.stats?.cpu_usage || Math.random() * 20),
-          memory: Math.round(container.stats?.memory_usage || Math.random() * 1024),
+          cpu: null,
+          memory: null,
           url: this.getLegacyContainerUrl(container)
         })
       })
@@ -133,8 +134,8 @@ export class TrueNASClient {
           id: jail.id || `jail-${index}`,
           name: jail.name || `Jail ${index + 1}`,
           status: jail.state === 'up' ? 'running' : 'stopped',
-          cpu: Math.round(Math.random() * 15),
-          memory: Math.round(Math.random() * 512),
+          cpu: null,
+          memory: null,
           url: jail.ip ? `http://${jail.ip}` : undefined
         })
       })
@@ -180,8 +181,8 @@ export class TrueNASClient {
       id,
       name,
       status: status as 'running' | 'stopped' | 'error',
-      cpu: 0,
-      memory: 0,
+      cpu: null,
+      memory: null,
       url,
       icon: typeof app.metadata?.icon === 'string' ? app.metadata.icon : undefined
     }
@@ -234,7 +235,7 @@ export class TrueNASClient {
     for (const port of usedPorts) {
       const hostPort = port?.host_ports?.find((item: any) => item?.host_port)
       if (hostPort?.host_port) {
-        const protocol = port?.protocol?.toLowerCase() === 'https' ? 'https' : (this.useSsl ? 'https' : 'http')
+        const protocol = inferProtocol(hostPort.host_port, this.useSsl)
         return `${protocol}://${this.host}:${hostPort.host_port}`
       }
     }
@@ -293,7 +294,7 @@ export class TrueNASClient {
     if (container.ports && container.ports.length > 0) {
       const port = container.ports.find((p: any) => p.public_port)
       if (port) {
-        const protocol = this.useSsl ? 'https' : 'http'
+        const protocol = inferProtocol(port.public_port, this.useSsl)
         return `${protocol}://${this.host}:${port.public_port}`
       }
     }
@@ -441,6 +442,7 @@ export class UnraidClient {
       memory: memoryUsage,
       storage: storageUsage,
       temperature,
+      gpu: null,
       apps
     }
   }
@@ -492,8 +494,8 @@ export class UnraidClient {
         id: container.id,
         name,
         status,
-        cpu: 0,
-        memory: 0,
+        cpu: null,
+        memory: null,
         url: this.getContainerUrl(container.ports)
       }
     })
@@ -529,9 +531,25 @@ export class UnraidClient {
   private getContainerUrl(ports: Array<{ publicPort: number | null }>) {
     const port = ports?.find((p) => p.publicPort)
     if (!port?.publicPort) return undefined
-    const protocol = this.useSsl ? 'https' : 'http'
+    const protocol = inferProtocol(port.publicPort, this.useSsl)
     return `${protocol}://${this.host}:${port.publicPort}`
   }
+}
+
+function inferProtocol(port?: number | null, preferHttps = false) {
+  if (!port) {
+    return preferHttps ? 'https' : 'http'
+  }
+
+  if ([443, 444, 8443, 9443].includes(port)) {
+    return 'https'
+  }
+
+  if ([80, 81, 8080, 8081, 3000, 3001, 8880].includes(port)) {
+    return 'http'
+  }
+
+  return preferHttps ? 'https' : 'http'
 }
 
 // API Client Factory

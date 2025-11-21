@@ -10,6 +10,7 @@ interface SystemInfo {
   memory: number
   storage: number
   temperature: number
+  gpu?: number | null
   apps: App[]
 }
 
@@ -17,8 +18,8 @@ interface App {
   id: string
   name: string
   status: 'running' | 'stopped' | 'error'
-  cpu: number
-  memory: number
+  cpu: number | null
+  memory: number | null
   icon?: string
   url?: string
 }
@@ -75,6 +76,7 @@ export async function GET(request: NextRequest) {
           memory: 0,
           storage: 0,
           temperature: 0,
+          gpu: null,
           apps: []
         })
       } else {
@@ -101,6 +103,7 @@ export async function GET(request: NextRequest) {
             memory: 0,
             storage: 0,
             temperature: 0,
+            gpu: null,
             apps: []
           })
         }
@@ -119,6 +122,7 @@ export async function GET(request: NextRequest) {
           memory: 0,
           storage: 0,
           temperature: 0,
+          gpu: null,
           apps: []
         })
       } else if (!systemConfigs.unraid.apiKey) {
@@ -131,6 +135,7 @@ export async function GET(request: NextRequest) {
           memory: 0,
           storage: 0,
           temperature: 0,
+          gpu: null,
           apps: []
         })
       } else {
@@ -157,6 +162,7 @@ export async function GET(request: NextRequest) {
             memory: 0,
             storage: 0,
             temperature: 0,
+            gpu: null,
             apps: []
           })
         }
