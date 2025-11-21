@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { DndContext, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, arrayMove, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -35,6 +35,7 @@ import {
   GripVertical,
   ChevronDown
 } from 'lucide-react'
+import { validateHost, validatePort } from '@/lib/system-config-validation'
 
 interface SystemInfo {
   id?: string
@@ -101,6 +102,7 @@ interface SystemConfigForm {
 
 const APP_ORDER_STORAGE_KEY = 'dashboard-app-order'
 const CARD_WIDTH_STORAGE_KEY = 'dashboard-card-width'
+const DASHBOARD_PREFS_STORAGE_KEY = 'dashboard-preferences'
 const DEFAULT_CARD_WIDTH = 320
 const DOCKER_ICON_FALLBACK = '/docker-icon.svg'
 
@@ -188,43 +190,42 @@ const emptyConfigForm: SystemConfigForm = {
   enabled: true
 }
 
+const validateSystemConfigForm = (form: SystemConfigForm, isEditing: boolean) => {
+  if (!form.name.trim()) {
+    return 'Name is required.'
+  }
+  const host = form.host.trim()
+  if (!host) {
+    return 'Host/IP is required.'
+  }
+  const hostError = validateHost(host)
+  if (hostError) {
+    return hostError
+  }
+  const portError = validatePort(form.port)
+  if (portError) {
+    return portError
+  }
+  if (!isEditing && !form.apiKey.trim()) {
+    return 'API key is required.'
+  }
+  return null
+}
+
+const connectionSignatureFields = (form: SystemConfigForm) => ({
+  host: form.host.trim(),
+  port: form.port,
+  type: form.type,
+  apiKey: form.apiKey.trim(),
+  useSsl: form.useSsl,
+  allowSelfSigned: form.allowSelfSigned
+})
+
+const getConnectionSignature = (form: SystemConfigForm) =>
+  JSON.stringify(connectionSignatureFields(form))
+
 export default function Dashboard() {
-  const [systems, setSystems] = useState<SystemInfo[]>([
-    {
-      name: 'TrueNAS Server',
-      type: 'truenas',
-      status: 'online',
-      uptime: '15 days, 7 hours',
-      cpu: 25,
-      memory: 60,
-      storage: 45,
-      temperature: 42,
-      gpu: null,
-      apps: [
-        { id: '1', name: 'Plex Media Server', status: 'running', cpu: 15, memory: 2048, url: 'http://192.168.1.100:32400' },
-        { id: '2', name: 'Home Assistant', status: 'running', cpu: 8, memory: 512, url: 'http://192.168.1.100:8123' },
-        { id: '3', name: 'Nextcloud', status: 'stopped', cpu: 0, memory: 0, url: 'http://192.168.1.100:443' },
-        { id: '4', name: 'Jellyfin', status: 'running', cpu: 12, memory: 1024, url: 'http://192.168.1.100:8096' },
-      ]
-    },
-    {
-      name: 'Unraid Server',
-      type: 'unraid',
-      status: 'online',
-      uptime: '32 days, 14 hours',
-      cpu: 40,
-      memory: 75,
-      storage: 68,
-      temperature: 38,
-      gpu: null,
-      apps: [
-        { id: '5', name: 'AdGuard Home', status: 'running', cpu: 2, memory: 256, url: 'http://192.168.1.200:80' },
-        { id: '6', name: 'Pi-hole', status: 'running', cpu: 1, memory: 128, url: 'http://192.168.1.200:80/admin' },
-        { id: '7', name: 'Portainer', status: 'running', cpu: 5, memory: 512, url: 'http://192.168.1.200:9000' },
-        { id: '8', name: 'Watchtower', status: 'error', cpu: 0, memory: 0 },
-      ]
-    }
-  ])
+  const [systems, setSystems] = useState<SystemInfo[]>([])
 
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date())
@@ -241,6 +242,13 @@ export default function Dashboard() {
   const [editingConfigId, setEditingConfigId] = useState<string | null>(null)
   const [configLoading, setConfigLoading] = useState(false)
   const [configError, setConfigError] = useState<string | null>(null)
+  const [configListLoading, setConfigListLoading] = useState(false)
+  const [connectionTest, setConnectionTest] = useState<{
+    status: 'idle' | 'testing' | 'success' | 'error'
+    message?: string
+    signature?: string
+  }>({ status: 'idle' })
+  const prefsHydratedRef = useRef(false)
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -275,67 +283,59 @@ export default function Dashboard() {
     }
   }, [])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    try {
+      const stored = window.localStorage.getItem(DASHBOARD_PREFS_STORAGE_KEY)
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        setConfig((prev) => ({
+          ...prev,
+          refreshInterval: typeof parsed.refreshInterval === 'number' ? parsed.refreshInterval : prev.refreshInterval,
+          notifications: typeof parsed.notifications === 'boolean' ? parsed.notifications : prev.notifications
+        }))
+      }
+    } catch (err) {
+      console.warn('Failed to parse stored dashboard preferences', err)
+    } finally {
+      prefsHydratedRef.current = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !prefsHydratedRef.current) return
+    window.localStorage.setItem(DASHBOARD_PREFS_STORAGE_KEY, JSON.stringify(config))
+  }, [config])
+
+  const fetchSystems = useCallback(async () => {
+    try {
+      const response = await fetch('/api/systems')
+      if (!response.ok) {
+        throw new Error('Failed to fetch systems')
+      }
+      const data = await response.json()
+      if (data.success) {
+        setSystems(data.data)
+        setLastUpdated(new Date())
+      }
+    } catch (error) {
+      console.error('Failed to fetch system data:', error)
+    }
+  }, [])
+
   // Auto-refresh effect
   useEffect(() => {
     if (!autoRefresh) return
-
-    const interval = setInterval(async () => {
-      try {
-        const response = await fetch('/api/systems')
-        if (response.ok) {
-          const data = await response.json()
-          if (data.success) {
-            setSystems(data.data)
-            setLastUpdated(new Date())
-          }
-        }
-      } catch (error) {
-        console.error('Failed to refresh data:', error)
-      }
+    const interval = setInterval(() => {
+      fetchSystems()
     }, config.refreshInterval)
-
     return () => clearInterval(interval)
-  }, [autoRefresh, config.refreshInterval])
+  }, [autoRefresh, config.refreshInterval, fetchSystems])
 
   // Initial data fetch
   useEffect(() => {
-    const fetchInitialData = async () => {
-      try {
-        const response = await fetch('/api/systems')
-        if (response.ok) {
-          const data = await response.json()
-          if (data.success) {
-            setSystems(data.data)
-            setLastUpdated(new Date())
-          }
-        }
-      } catch (error) {
-        console.error('Failed to fetch initial data:', error)
-      }
-    }
-
-    fetchInitialData()
-  }, [])
-
-  useEffect(() => {
-    const loadConfigs = async () => {
-      try {
-        setConfigLoading(true)
-        const response = await fetch('/api/system-configs')
-        if (!response.ok) {
-          throw new Error('Failed to load system configs')
-        }
-        const json = await response.json()
-        setSystemConfigs(json.data || [])
-      } catch (err) {
-        console.error(err)
-        setConfigError('Failed to load system configs')
-      } finally {
-        setConfigLoading(false)
-      }
-    }
-    loadConfigs()
-  }, [])
+    fetchSystems()
+  }, [fetchSystems])
 
   const appsWithMeta = useMemo<AggregatedApp[]>(() => {
     return systems.flatMap((system) =>
@@ -352,6 +352,22 @@ export default function Dashboard() {
       }))
     )
   }, [systems])
+
+  const editingSystem = useMemo(
+    () => systemConfigs.find((config) => config.id === editingConfigId) || null,
+    [systemConfigs, editingConfigId]
+  )
+  const isAddMode = !editingConfigId
+  const currentSignature = useMemo(
+    () => getConnectionSignature(configForm),
+    [configForm.host, configForm.port, configForm.type, configForm.apiKey, configForm.useSsl, configForm.allowSelfSigned]
+  )
+  const addModeTestPassed = useMemo(
+    () =>
+      connectionTest.status === 'success' &&
+      connectionTest.signature === currentSignature,
+    [connectionTest.status, connectionTest.signature, currentSignature]
+  )
 
   const currentAppIds = useMemo(() => appsWithMeta.map((app) => app.globalId), [appsWithMeta])
   const persistOrder = useCallback((order: string[]) => {
@@ -425,38 +441,112 @@ export default function Dashboard() {
     setConfigForm(emptyConfigForm)
     setEditingConfigId(null)
     setConfigError(null)
+    setConnectionTest({ status: 'idle' })
   }
 
-  const refreshSystemConfigs = async () => {
-    const response = await fetch('/api/system-configs')
-    if (response.ok) {
+  const refreshSystemConfigs = useCallback(async () => {
+    try {
+      setConfigError(null)
+      setConfigListLoading(true)
+      const response = await fetch('/api/system-configs')
+      if (!response.ok) {
+        throw new Error('Failed to load system configs')
+      }
       const json = await response.json()
       setSystemConfigs(json.data || [])
+    } catch (err) {
+      console.error(err)
+      setConfigError('Failed to load system configs')
+    } finally {
+      setConfigListLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    refreshSystemConfigs()
+  }, [refreshSystemConfigs])
+
+  useEffect(() => {
+    if (!isAddMode) return
+    if (connectionTest.status === 'success' && connectionTest.signature !== currentSignature) {
+      setConnectionTest({ status: 'idle' })
+    }
+  }, [isAddMode, connectionTest.status, connectionTest.signature, currentSignature])
+
+  const handleTestConnection = useCallback(async () => {
+    if (!isAddMode) return
+    const validationError = validateSystemConfigForm(configForm, false)
+    if (validationError) {
+      setConnectionTest({ status: 'error', message: validationError })
+      setConfigError(validationError)
+      return
+    }
+
+    try {
+      setConnectionTest({ status: 'testing' })
+      const payload = {
+        ...connectionSignatureFields(configForm),
+        name: configForm.name.trim(),
+        type: configForm.type,
+        enabled: configForm.enabled
+      }
+      const response = await fetch('/api/system-configs/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      const data = await response.json()
+      if (response.ok && data.success) {
+        setConnectionTest({
+          status: 'success',
+          message: 'Connection verified successfully.',
+          signature: currentSignature
+        })
+        setConfigError(null)
+      } else {
+        setConnectionTest({
+          status: 'error',
+          message: data.error || 'Failed to validate system connection.'
+        })
+      }
+    } catch (err) {
+      console.error('Connection test failed', err)
+      setConnectionTest({
+        status: 'error',
+        message: err instanceof Error ? err.message : 'Network error'
+      })
+    }
+  }, [configForm, currentSignature, isAddMode])
 
   const handleConfigSubmit = async () => {
     try {
       setConfigLoading(true)
       setConfigError(null)
+      const validationError = validateSystemConfigForm(configForm, Boolean(editingConfigId))
+      if (validationError) {
+        setConfigError(validationError)
+        setConfigLoading(false)
+        return
+      }
+      if (!editingConfigId) {
+        if (!addModeTestPassed) {
+          setConfigError('Please test and verify the connection before adding a system.')
+          setConfigLoading(false)
+          return
+        }
+      }
       const payload: any = {
-        name: configForm.name,
-        host: configForm.host,
+        name: configForm.name.trim(),
+        host: configForm.host.trim(),
         port: configForm.port,
         type: configForm.type,
         useSsl: configForm.useSsl,
         allowSelfSigned: configForm.allowSelfSigned,
         enabled: configForm.enabled
       }
-      if (configForm.apiKey) {
-        payload.apiKey = configForm.apiKey
+      if (configForm.apiKey.trim()) {
+        payload.apiKey = configForm.apiKey.trim()
       }
-      if (!configForm.apiKey && !editingConfigId) {
-        setConfigError('API key is required for new systems.')
-        setConfigLoading(false)
-        return
-      }
-
       const url = editingConfigId
         ? `/api/system-configs/${editingConfigId}`
         : '/api/system-configs'
@@ -473,6 +563,7 @@ export default function Dashboard() {
       }
 
       await refreshSystemConfigs()
+      await fetchSystems()
       resetConfigForm()
     } catch (err) {
       console.error(err)
@@ -484,6 +575,7 @@ export default function Dashboard() {
 
   const handleEditConfig = (config: StoredSystemConfig) => {
     setEditingConfigId(config.id)
+    setConnectionTest({ status: 'idle' })
     setConfigForm({
       id: config.id,
       name: config.name,
@@ -502,6 +594,7 @@ export default function Dashboard() {
     try {
       await fetch(`/api/system-configs/${id}`, { method: 'DELETE' })
       await refreshSystemConfigs()
+      await fetchSystems()
     } catch (err) {
       console.error(err)
       setConfigError('Failed to delete system')
@@ -516,6 +609,7 @@ export default function Dashboard() {
         body: JSON.stringify({ enabled: value })
       })
       await refreshSystemConfigs()
+      await fetchSystems()
     } catch (err) {
       console.error(err)
       setConfigError('Failed to update system')
@@ -543,21 +637,24 @@ export default function Dashboard() {
       
       if (response.ok && data.success) {
         // Update local state optimistically
-        setSystems(prev => prev.map(system => {
-          if (system.name === systemId) {
+        setSystems((prevSystems) =>
+          prevSystems.map((prevSystem) => {
+            const matchesId = system.id && prevSystem.id === system.id
+            const matchesType = !system.id && prevSystem.type === system.type
+            if (!matchesId && !matchesType) {
+              return prevSystem
+            }
             return {
-              ...system,
-              apps: system.apps.map(app => {
-                if (app.id === appId) {
-                  const newStatus = action === 'stop' ? 'stopped' : 'running'
-                  return { ...app, status: newStatus as any }
-                }
-                return app
+              ...prevSystem,
+              apps: prevSystem.apps.map((app) => {
+                if (app.id !== appId) return app
+                const newStatus = action === 'stop' ? 'stopped' : 'running'
+                return { ...app, status: newStatus }
               })
             }
-          }
-          return system
-        }))
+          })
+        )
+        await fetchSystems()
       } else {
         // Show error message
         alert(`Error: ${data.error || 'Failed to perform action'}`)
@@ -616,138 +713,304 @@ export default function Dashboard() {
                         {configError}
                       </div>
                     )}
-                    <div className="max-h-60 space-y-3 overflow-y-auto pr-1">
-                      {configLoading ? (
+                    <div className="space-y-3 pr-1 max-h-[60vh] overflow-y-auto">
+                      {configListLoading ? (
                         <p className="text-sm text-muted-foreground">Loading systems...</p>
                       ) : systemConfigs.length === 0 ? (
                         <p className="text-sm text-muted-foreground">No systems configured yet.</p>
                       ) : (
-                        systemConfigs.map((system) => (
-                          <Card key={system.id}>
-                            <CardContent className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between">
-                              <div>
-                                <p className="font-medium">{system.name}</p>
-                                <p className="text-sm text-muted-foreground">
-                                  {system.host}:{system.port}
-                                </p>
-                              </div>
-                              <Badge variant="secondary" className="capitalize">
-                                {system.type}
-                              </Badge>
-                              <div className="flex items-center gap-2">
-                                <Switch
-                                  checked={system.enabled}
-                                  onCheckedChange={(checked) => handleToggleConfigEnabled(system, checked)}
-                                />
-                                <span className="text-sm text-muted-foreground">
-                                  {system.enabled ? 'Enabled' : 'Disabled'}
-                                </span>
-                              </div>
-                              <div className="flex gap-2">
-                                <Button variant="outline" size="sm" onClick={() => handleEditConfig(system)}>
-                                  Edit
-                                </Button>
-                                <Button variant="destructive" size="sm" onClick={() => handleDeleteConfig(system.id)}>
-                                  Delete
-                                </Button>
-                              </div>
-                            </CardContent>
-                          </Card>
-                        ))
+                        systemConfigs.map((system) => {
+                          const isEditing = editingConfigId === system.id
+                          return (
+                            <Collapsible key={system.id} open={isEditing}>
+                              <Card
+                                className={cn(
+                                  'border-border/60 transition-all',
+                                  isEditing && 'border-primary/60 shadow-lg ring-1 ring-primary/30'
+                                )}
+                              >
+                                <CardContent className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between">
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <p className="font-medium">{system.name}</p>
+                                      {isEditing && (
+                                        <Badge variant="outline" className="border-primary text-primary shadow-sm">
+                                          Editing
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    <p className="text-sm text-muted-foreground">
+                                      {system.host}:{system.port}
+                                    </p>
+                                  </div>
+                                  <Badge variant="secondary" className="capitalize">
+                                    {system.type}
+                                  </Badge>
+                                  <div className="flex items-center gap-2">
+                                    <Switch
+                                      checked={system.enabled}
+                                      onCheckedChange={(checked) => handleToggleConfigEnabled(system, checked)}
+                                    />
+                                    <span className="text-sm text-muted-foreground">
+                                      {system.enabled ? 'Enabled' : 'Disabled'}
+                                    </span>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() =>
+                                        isEditing ? resetConfigForm() : handleEditConfig(system)
+                                      }
+                                    >
+                                      {isEditing ? 'Close' : 'Edit'}
+                                    </Button>
+                                    <Button variant="destructive" size="sm" onClick={() => handleDeleteConfig(system.id)}>
+                                      Delete
+                                    </Button>
+                                  </div>
+                                </CardContent>
+                                <CollapsibleContent className="overflow-hidden border-t border-border/70 data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down">
+                                  {isEditing && (
+                                    <div className="space-y-4 px-4 py-4 text-sm">
+                                      <div className="grid gap-4 md:grid-cols-2">
+                                        <div className="space-y-2">
+                                          <Label>Name</Label>
+                                          <Input
+                                            value={configForm.name}
+                                            onChange={(e) =>
+                                              setConfigForm((prev) => ({ ...prev, name: e.target.value }))
+                                            }
+                                            placeholder="My NAS"
+                                          />
+                                        </div>
+                                        <div className="space-y-2">
+                                          <Label>Platform</Label>
+                                          <Select
+                                            value={configForm.type}
+                                            onValueChange={(value: 'truenas' | 'unraid') =>
+                                              setConfigForm((prev) => ({ ...prev, type: value }))
+                                            }
+                                          >
+                                            <SelectTrigger>
+                                              <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                              <SelectItem value="truenas">TrueNAS</SelectItem>
+                                              <SelectItem value="unraid">Unraid</SelectItem>
+                                            </SelectContent>
+                                          </Select>
+                                        </div>
+                                        <div className="space-y-2">
+                                          <Label>Host/IP</Label>
+                                          <Input
+                                            value={configForm.host}
+                                            onChange={(e) =>
+                                              setConfigForm((prev) => ({ ...prev, host: e.target.value }))
+                                            }
+                                          />
+                                        </div>
+                                        <div className="space-y-2">
+                                          <Label>Port</Label>
+                                          <Input
+                                            type="number"
+                                            value={configForm.port}
+                                            onChange={(e) =>
+                                              setConfigForm((prev) => ({
+                                                ...prev,
+                                                port: Number(e.target.value)
+                                              }))
+                                            }
+                                          />
+                                        </div>
+                                        <div className="space-y-2 md:col-span-2">
+                                          <Label>API Key</Label>
+                                          <Input
+                                            type="password"
+                                            value={configForm.apiKey}
+                                            onChange={(e) =>
+                                              setConfigForm((prev) => ({ ...prev, apiKey: e.target.value }))
+                                            }
+                                            placeholder="Leave blank to keep existing key"
+                                          />
+                                        </div>
+                                      </div>
+                                      <div className="grid gap-3 md:grid-cols-3">
+                                        <div className="flex items-center gap-2">
+                                          <Switch
+                                            checked={configForm.useSsl}
+                                            onCheckedChange={(checked) =>
+                                              setConfigForm((prev) => ({ ...prev, useSsl: checked }))
+                                            }
+                                          />
+                                          <Label>Use HTTPS</Label>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <Switch
+                                            checked={configForm.allowSelfSigned}
+                                            onCheckedChange={(checked) =>
+                                              setConfigForm((prev) => ({ ...prev, allowSelfSigned: checked }))
+                                            }
+                                          />
+                                          <Label>Allow self-signed</Label>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <Switch
+                                            checked={configForm.enabled}
+                                            onCheckedChange={(checked) =>
+                                              setConfigForm((prev) => ({ ...prev, enabled: checked }))
+                                            }
+                                          />
+                                          <Label>Enabled</Label>
+                                        </div>
+                                      </div>
+                                      <div className="flex justify-end gap-2">
+                                        <Button variant="outline" onClick={resetConfigForm}>
+                                          Cancel
+                                        </Button>
+                                        <Button onClick={handleConfigSubmit} disabled={configLoading}>
+                                          Save Changes
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </CollapsibleContent>
+                              </Card>
+                            </Collapsible>
+                          )
+                        })
                       )}
                     </div>
                     <Separator />
                     <div className="space-y-3">
-                      <h4 className="text-base font-medium">
-                        {editingConfigId ? 'Edit System' : 'Add System'}
-                      </h4>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div className="space-y-2">
-                          <Label>Name</Label>
-                          <Input
-                            value={configForm.name}
-                            onChange={(e) => setConfigForm((prev) => ({ ...prev, name: e.target.value }))}
-                            placeholder="My TrueNAS"
-                          />
+                      {editingConfigId ? (
+                        <div className="flex flex-col gap-3 rounded-md border border-dashed border-primary/40 bg-primary/5 px-4 py-3 text-sm text-primary">
+                          <p>
+                            Editing <span className="font-medium">{editingSystem?.name || 'system'}</span>. Update the
+                            fields directly inside the expanded card above.
+                          </p>
+                          <div>
+                            <Button variant="outline" size="sm" onClick={resetConfigForm}>
+                              Cancel Editing
+                            </Button>
+                          </div>
                         </div>
-                        <div className="space-y-2">
-                          <Label>Platform</Label>
-                          <Select
-                            value={configForm.type}
-                            onValueChange={(value: 'truenas' | 'unraid') =>
-                              setConfigForm((prev) => ({ ...prev, type: value }))
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Select platform" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="truenas">TrueNAS</SelectItem>
-                              <SelectItem value="unraid">Unraid</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Host/IP</Label>
-                          <Input
-                            value={configForm.host}
-                            onChange={(e) => setConfigForm((prev) => ({ ...prev, host: e.target.value }))}
-                            placeholder="192.168.1.24"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Port</Label>
-                          <Input
-                            type="number"
-                            value={configForm.port}
-                            onChange={(e) => setConfigForm((prev) => ({ ...prev, port: Number(e.target.value) }))}
-                          />
-                        </div>
-                        <div className="space-y-2 md:col-span-2">
-                          <Label>API Key</Label>
-                          <Input
-                            type="password"
-                            value={configForm.apiKey}
-                            onChange={(e) => setConfigForm((prev) => ({ ...prev, apiKey: e.target.value }))}
-                            placeholder={editingConfigId ? 'Leave blank to keep existing key' : 'Required'}
-                          />
-                        </div>
-                      </div>
-                      <div className="grid gap-3 md:grid-cols-3">
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={configForm.useSsl}
-                            onCheckedChange={(checked) => setConfigForm((prev) => ({ ...prev, useSsl: checked }))}
-                          />
-                          <Label>Use HTTPS</Label>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={configForm.allowSelfSigned}
-                            onCheckedChange={(checked) =>
-                              setConfigForm((prev) => ({ ...prev, allowSelfSigned: checked }))
-                            }
-                          />
-                          <Label>Allow self-signed</Label>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <Switch
-                            checked={configForm.enabled}
-                            onCheckedChange={(checked) => setConfigForm((prev) => ({ ...prev, enabled: checked }))}
-                          />
-                          <Label>Enabled</Label>
-                        </div>
-                      </div>
-                      <div className="flex justify-end gap-2">
-                        {editingConfigId && (
-                          <Button variant="outline" onClick={resetConfigForm}>
-                            Cancel
-                          </Button>
-                        )}
-                        <Button onClick={handleConfigSubmit} disabled={configLoading}>
-                          {editingConfigId ? 'Save Changes' : 'Add System'}
-                        </Button>
-                      </div>
+                      ) : (
+                        <>
+                          <h4 className="text-base font-medium">Add System</h4>
+                          <div className="grid gap-4 md:grid-cols-2">
+                            <div className="space-y-2">
+                              <Label>Name</Label>
+                              <Input
+                                value={configForm.name}
+                                onChange={(e) => setConfigForm((prev) => ({ ...prev, name: e.target.value }))}
+                                placeholder="My TrueNAS"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Platform</Label>
+                              <Select
+                                value={configForm.type}
+                                onValueChange={(value: 'truenas' | 'unraid') =>
+                                  setConfigForm((prev) => ({ ...prev, type: value }))
+                                }
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Select platform" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="truenas">TrueNAS</SelectItem>
+                                  <SelectItem value="unraid">Unraid</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Host/IP</Label>
+                              <Input
+                                value={configForm.host}
+                                onChange={(e) => setConfigForm((prev) => ({ ...prev, host: e.target.value }))}
+                                placeholder="192.168.1.24"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label>Port</Label>
+                              <Input
+                                type="number"
+                                value={configForm.port}
+                                onChange={(e) => setConfigForm((prev) => ({ ...prev, port: Number(e.target.value) }))}
+                              />
+                            </div>
+                            <div className="space-y-2 md:col-span-2">
+                              <Label>API Key</Label>
+                              <Input
+                                type="password"
+                                value={configForm.apiKey}
+                                onChange={(e) => setConfigForm((prev) => ({ ...prev, apiKey: e.target.value }))}
+                                placeholder="Required"
+                              />
+                            </div>
+                          </div>
+                          <div className="grid gap-3 md:grid-cols-3">
+                            <div className="flex items-center gap-2">
+                              <Switch
+                                checked={configForm.useSsl}
+                                onCheckedChange={(checked) => setConfigForm((prev) => ({ ...prev, useSsl: checked }))}
+                              />
+                              <Label>Use HTTPS</Label>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Switch
+                                checked={configForm.allowSelfSigned}
+                                onCheckedChange={(checked) =>
+                                  setConfigForm((prev) => ({ ...prev, allowSelfSigned: checked }))
+                                }
+                              />
+                              <Label>Allow self-signed</Label>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <Switch
+                                checked={configForm.enabled}
+                                onCheckedChange={(checked) =>
+                                  setConfigForm((prev) => ({ ...prev, enabled: checked }))
+                                }
+                              />
+                              <Label>Enabled</Label>
+                            </div>
+                          </div>
+                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <Button
+                              variant="outline"
+                              onClick={handleTestConnection}
+                              disabled={connectionTest.status === 'testing'}
+                            >
+                              {connectionTest.status === 'testing' ? 'Testing...' : 'Test Connection'}
+                            </Button>
+                            {connectionTest.status === 'success' && (
+                              <span className="text-sm text-green-600">{connectionTest.message}</span>
+                            )}
+                            {connectionTest.status === 'error' && (
+                              <span className="text-sm text-destructive">{connectionTest.message}</span>
+                            )}
+                            {connectionTest.status !== 'success' && (
+                              <span className="text-xs text-muted-foreground">
+                                Please test the connection before adding the system.
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex justify-end gap-2">
+                            <Button
+                              onClick={handleConfigSubmit}
+                              disabled={
+                                configLoading ||
+                                connectionTest.status === 'testing' ||
+                                !addModeTestPassed
+                              }
+                            >
+                              Add System
+                            </Button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -803,42 +1066,51 @@ export default function Dashboard() {
       <div className="container mx-auto px-4 py-6">
         {/* System Overview */}
         <div className="mb-6 flex flex-col gap-2 md:flex-row">
-          {systems.map((system) => (
-            <Card key={system.name} className="flex-1 border-border/60 bg-muted/40">
-              <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-xs sm:text-sm text-muted-foreground">
-                <div className="flex items-center gap-2">
-                  <div className={`h-2 w-2 rounded-full ${getStatusColor(system.status)}`} />
-                  <span className="font-semibold text-foreground">{system.name}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Clock className="h-3 w-3" />
-                  <span>{system.uptime}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Cpu className="h-4 w-4 text-primary" />
-                  <span>{system.cpu}% CPU</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <MemoryStick className="h-4 w-4 text-primary" />
-                  <span>{system.memory}% RAM</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <HardDrive className="h-4 w-4 text-primary" />
-                  <span>{system.storage}% Storage</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Thermometer className="h-4 w-4 text-primary" />
-                  <span>{system.temperature}°C</span>
-                </div>
-                {typeof system.gpu === 'number' && (
-                  <div className="flex items-center gap-2">
-                    <Activity className="h-4 w-4 text-primary" />
-                    <span>{system.gpu}% GPU</span>
-                  </div>
-                )}
-              </div>
+          {systems.length === 0 ? (
+            <Card className="w-full border-border/60 bg-muted/50">
+              <CardContent className="flex flex-col gap-2 px-4 py-5 text-sm text-muted-foreground">
+                <p className="font-medium text-foreground">No systems connected yet.</p>
+                <p>Add a TrueNAS or Unraid host from the Settings dialog to start monitoring.</p>
+              </CardContent>
             </Card>
-          ))}
+          ) : (
+            systems.map((system) => (
+              <Card key={system.name} className="flex-1 border-border/60 bg-muted/40">
+                <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-xs sm:text-sm text-muted-foreground">
+                  <div className="flex items-center gap-2">
+                    <div className={`h-2 w-2 rounded-full ${getStatusColor(system.status)}`} />
+                    <span className="font-semibold text-foreground">{system.name}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-3 w-3" />
+                    <span>{system.uptime}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-4 w-4 text-primary" />
+                    <span>{system.cpu}% CPU</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <MemoryStick className="h-4 w-4 text-primary" />
+                    <span>{system.memory}% RAM</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <HardDrive className="h-4 w-4 text-primary" />
+                    <span>{system.storage}% Storage</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Thermometer className="h-4 w-4 text-primary" />
+                    <span>{system.temperature}°C</span>
+                  </div>
+                  {typeof system.gpu === 'number' && (
+                    <div className="flex items-center gap-2">
+                      <Activity className="h-4 w-4 text-primary" />
+                      <span>{system.gpu}% GPU</span>
+                    </div>
+                  )}
+                </div>
+              </Card>
+            ))
+          )}
         </div>
 
         {/* Apps Management */}

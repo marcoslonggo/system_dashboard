@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { encryptSensitive } from '@/lib/encryption'
+import {
+  normalizeConfigInput,
+  validateConfigPayload
+} from '@/lib/system-config-validation'
 
 export async function GET() {
   const configs = await prisma.systemConfig.findMany({
@@ -39,20 +43,36 @@ export async function POST(request: NextRequest) {
       enabled = true
     } = body
 
-    if (!name || !host || !type || !apiKey) {
-      return NextResponse.json(
-        { error: 'name, host, type and apiKey are required' },
-        { status: 400 }
-      )
+    const { name: normalizedName, host: normalizedHost, apiKey: normalizedApiKey, port: numericPort } =
+      normalizeConfigInput({
+        name: name || '',
+        host: host || '',
+        port: Number(port) || 443,
+        apiKey: apiKey || ''
+      })
+
+    const validationError = validateConfigPayload({
+      name: normalizedName,
+      host: normalizedHost,
+      port: numericPort,
+      apiKey: normalizedApiKey,
+      requireApiKey: true
+    })
+    if (validationError) {
+      return NextResponse.json({ error: validationError }, { status: 400 })
     }
 
-    const encryptedKey = encryptSensitive(apiKey)
+    if (!type || !['truenas', 'unraid'].includes(type)) {
+      return NextResponse.json({ error: 'type must be truenas or unraid' }, { status: 400 })
+    }
+
+    const encryptedKey = encryptSensitive(normalizedApiKey)
 
     const config = await prisma.systemConfig.create({
       data: {
-        name,
-        host,
-        port: Number(port) || 443,
+        name: normalizedName,
+        host: normalizedHost,
+        port: numericPort,
         type,
         apiKeyEncrypted: encryptedKey,
         useSsl: Boolean(useSsl),

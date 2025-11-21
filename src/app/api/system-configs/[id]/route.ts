@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
 import { encryptSensitive } from '@/lib/encryption'
+import { isValidHost, validatePort } from '@/lib/system-config-validation'
 
 export async function PUT(
   request: NextRequest,
@@ -20,16 +21,50 @@ export async function PUT(
     } = body
 
     const data: any = {}
-    if (name !== undefined) data.name = name
-    if (host !== undefined) data.host = host
-    if (port !== undefined) data.port = Number(port) || 443
-    if (type !== undefined) data.type = type
+    if (name !== undefined) {
+      const trimmed = String(name).trim()
+      if (!trimmed) {
+        return NextResponse.json({ error: 'Name is required' }, { status: 400 })
+      }
+      data.name = trimmed
+    }
+    if (host !== undefined) {
+      const trimmedHost = String(host).trim()
+      if (!trimmedHost) {
+        return NextResponse.json({ error: 'Host/IP is required' }, { status: 400 })
+      }
+      if (!isValidHost(trimmedHost)) {
+        return NextResponse.json(
+          { error: 'Host/IP must be a valid IPv4 address or hostname' },
+          { status: 400 }
+        )
+      }
+      data.host = trimmedHost
+    }
+    if (port !== undefined) {
+      const numericPort = Number(port)
+      const portError = validatePort(numericPort)
+      if (portError) {
+        return NextResponse.json({ error: portError }, { status: 400 })
+      }
+      data.port = numericPort
+    }
+    if (type !== undefined) {
+      if (!['truenas', 'unraid'].includes(type)) {
+        return NextResponse.json({ error: 'type must be truenas or unraid' }, { status: 400 })
+      }
+      data.type = type
+    }
     if (useSsl !== undefined) data.useSsl = Boolean(useSsl)
     if (allowSelfSigned !== undefined)
       data.allowSelfSigned = Boolean(allowSelfSigned)
     if (enabled !== undefined) data.enabled = Boolean(enabled)
-    if (apiKey) {
-      data.apiKeyEncrypted = encryptSensitive(apiKey)
+    if (apiKey !== undefined) {
+      const trimmedKey = String(apiKey).trim()
+      if (!trimmedKey) {
+        return NextResponse.json({ error: 'API key cannot be empty' }, { status: 400 })
+      }
+      data.apiKeyEncrypted = encryptSensitive(trimmedKey)
     }
 
     const updated = await prisma.systemConfig.update({
