@@ -141,7 +141,7 @@ const deriveAppIcon = (provided?: string, name?: string) => {
   if (!slug) {
     return DOCKER_ICON_FALLBACK
   }
-  return `https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg/${slug}.svg`
+  return `/api/icons/${slug}`
 }
 
 const getStatusColor = (status: string) => {
@@ -228,7 +228,7 @@ export default function Dashboard() {
   const [systems, setSystems] = useState<SystemInfo[]>([])
 
   const [autoRefresh, setAutoRefresh] = useState(true)
-  const [lastUpdated, setLastUpdated] = useState<Date>(new Date())
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [systemDetailsOpen, setSystemDetailsOpen] = useState<Record<string, boolean>>({})
   const [cardMinWidth, setCardMinWidth] = useState(DEFAULT_CARD_WIDTH)
@@ -1125,7 +1125,7 @@ export default function Dashboard() {
             <div className="flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-end">
               <div className="flex items-center gap-2">
                 <Activity className="h-4 w-4" />
-                Last updated: {lastUpdated.toLocaleTimeString()}
+                Last updated: {lastUpdated ? lastUpdated.toLocaleTimeString() : '—'}
               </div>
               <div className="flex items-center gap-3">
                 <span>Card size</span>
