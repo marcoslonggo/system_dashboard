@@ -98,6 +98,45 @@ const iconResponse = (payload: Buffer) =>
     }
   })
 
+const palette = [
+  ['#0EA5E9', '#38BDF8'],
+  ['#6366F1', '#8B5CF6'],
+  ['#F97316', '#FB923C'],
+  ['#14B8A6', '#2DD4BF'],
+  ['#EC4899', '#F472B6'],
+  ['#A855F7', '#C084FC'],
+  ['#22D3EE', '#67E8F9']
+]
+
+const hashString = (value: string) =>
+  value.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
+
+const generateIconSvg = (slug: string) => {
+  const hash = hashString(slug)
+  const [start, end] = palette[hash % palette.length]
+  const initials = slug
+    .split('-')
+    .map((segment) => segment[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || 'APP'
+
+  return Buffer.from(
+    `<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="grad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="${start}"/>
+          <stop offset="100%" stop-color="${end}"/>
+        </linearGradient>
+      </defs>
+      <rect width="64" height="64" rx="14" fill="url(#grad)"/>
+      <text x="50%" y="52%" font-family="Inter, sans-serif" font-size="26" fill="#ffffff" font-weight="600" text-anchor="middle" dominant-baseline="middle">
+        ${initials}
+      </text>
+    </svg>`
+  )
+}
+
 export async function GET(
   _request: NextRequest,
   context: { params: Promise<{ slug: string }> }
@@ -123,6 +162,11 @@ export async function GET(
       if (remote) {
         return iconResponse(remote)
       }
+    }
+
+    const generated = generateIconSvg(sanitized)
+    if (generated) {
+      return iconResponse(generated)
     }
 
     const fallback = await fs.readFile(DEFAULT_ICON_PATH)
