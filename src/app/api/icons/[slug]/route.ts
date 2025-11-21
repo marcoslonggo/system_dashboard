@@ -13,10 +13,11 @@ const sanitizeSlug = (slug: string) => {
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { slug: string } }
+  context: { params: Promise<{ slug: string }> }
 ) {
   try {
-    const sanitized = sanitizeSlug(params.slug || '')
+    const { slug } = await context.params
+    const sanitized = sanitizeSlug(slug || '')
     if (!sanitized) {
       const fallback = await fs.readFile(DEFAULT_ICON_PATH)
       return new NextResponse(fallback, {
