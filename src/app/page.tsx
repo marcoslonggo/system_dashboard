@@ -69,6 +69,7 @@ interface AggregatedApp extends App {
   systemStatus: SystemInfo['status']
   hostCpu: number
   hostMemory: number
+  fallbackIcon: string
 }
 
 interface DashboardPreferences {
@@ -127,21 +128,27 @@ const arraysEqual = (a: string[], b: string[]) => {
   return true
 }
 
-const deriveAppIcon = (provided?: string, name?: string) => {
-  if (provided && provided.length > 0) {
-    return provided
-  }
-  if (!name) {
-    return DOCKER_ICON_FALLBACK
-  }
-  const slug = name
+const slugifyName = (name?: string) => {
+  if (!name) return ''
+  return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-  if (!slug) {
-    return DOCKER_ICON_FALLBACK
+}
+
+const deriveAppIcon = (provided?: string, name?: string) => {
+  const slug = slugifyName(name)
+  const slugIcon = slug ? `/api/icons/${slug}` : DOCKER_ICON_FALLBACK
+
+  if (provided && provided.length > 0) {
+    return { primary: provided, fallback: slugIcon }
   }
-  return `/api/icons/${slug}`
+
+  if (slug) {
+    return { primary: slugIcon, fallback: DOCKER_ICON_FALLBACK }
+  }
+
+  return { primary: DOCKER_ICON_FALLBACK, fallback: DOCKER_ICON_FALLBACK }
 }
 
 const getStatusColor = (status: string) => {
@@ -341,7 +348,13 @@ export default function Dashboard() {
     return systems.flatMap((system) =>
       system.apps.map((app) => ({
         ...app,
-        icon: deriveAppIcon(app.icon, app.name),
+        ...(() => {
+          const iconData = deriveAppIcon(app.icon, app.name)
+          return {
+            icon: iconData.primary,
+            fallbackIcon: iconData.fallback
+          }
+        })(),
         globalId: `${system.type}:${app.id}`,
         systemId: system.id,
         systemName: system.name,
@@ -1197,6 +1210,7 @@ function SortableAppCard({ app, onAction, minWidth }: SortableAppCardProps) {
   const HostIcon = meta.icon
   const hasCpu = typeof app.cpu === 'number'
   const hasMemory = typeof app.memory === 'number'
+  const fallbackIcon = app.fallbackIcon || DOCKER_ICON_FALLBACK
 
   return (
     <div
@@ -1225,12 +1239,18 @@ function SortableAppCard({ app, onAction, minWidth }: SortableAppCardProps) {
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 overflow-hidden rounded-md bg-muted p-1">
                 <img
-                  src={app.icon || DOCKER_ICON_FALLBACK}
+                  src={app.icon || fallbackIcon}
                   alt={`${app.name} icon`}
                   className="h-full w-full object-contain"
                   onError={(event) => {
-                    event.currentTarget.onerror = null
-                    event.currentTarget.src = DOCKER_ICON_FALLBACK
+                    const imgEl = event.currentTarget
+                    if (imgEl.dataset.fallbackUsed !== 'true' && fallbackIcon) {
+                      imgEl.dataset.fallbackUsed = 'true'
+                      imgEl.src = fallbackIcon
+                      return
+                    }
+                    imgEl.onerror = null
+                    imgEl.src = DOCKER_ICON_FALLBACK
                   }}
                 />
               </div>
