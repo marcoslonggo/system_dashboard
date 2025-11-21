@@ -1,6 +1,6 @@
-<svg viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'>
-  <rect width='64' height='64' rx='12' fill='#0EA5E9'/>
-  <path d='M16 42h32a2 2 0 0 1 2 2v6H14v-6a2 2 0 0 1 2-2z' fill='#0F172A'/>
-  <path d='M22 18h20v18H22z' fill='#E2E8F0'/>
-  <path d='M18 32h28v4H18z' fill='#38BDF8'/>
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <rect width="64" height="64" rx="12" fill="#0f172a"/>
+  <path d="M18 20h28v24H18z" fill="#22d3ee"/>
+  <path d="M16 26h32v4H16z" fill="#0891b2"/>
+  <text x="32" y="43" text-anchor="middle" font-family="Inter, sans-serif" font-weight="600" font-size="18" fill="#e0f2fe">COPS</text>
 </svg>

@@ -1,6 +1,7 @@
-<svg viewBox='0 0 64 64' xmlns='http://www.w3.org/2000/svg'>
-  <rect width='64' height='64' rx='12' fill='#0EA5E9'/>
-  <path d='M16 42h32a2 2 0 0 1 2 2v6H14v-6a2 2 0 0 1 2-2z' fill='#0F172A'/>
-  <path d='M22 18h20v18H22z' fill='#E2E8F0'/>
-  <path d='M18 32h28v4H18z' fill='#38BDF8'/>
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <rect width="64" height="64" rx="12" fill="#1d4ed8"/>
+  <path d="M18 18h28v22H18z" fill="#bfdbfe"/>
+  <path d="M18 40h28v6H18z" fill="#1e3a8a"/>
+  <path d="M30 18v28" stroke="#1e3a8a" stroke-width="3"/>
+  <circle cx="32" cy="44" r="6" fill="#fcd34d"/>
 </svg>
