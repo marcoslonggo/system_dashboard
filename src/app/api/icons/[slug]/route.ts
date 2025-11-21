@@ -79,15 +79,13 @@ const MIME_MAP: Record<string, string> = {
 
 const readLocalIcon = async (slug: string) => {
   try {
-    const files = await fs.readdir(ICONS_DIR)
-    for (const file of files) {
-      const lower = file.toLowerCase()
-      for (const ext of LOCAL_EXTS) {
-        if (lower === `${slug}${ext}`) {
-          const iconPath = path.join(ICONS_DIR, file)
-          const buffer = await fs.readFile(iconPath)
-          return { buffer, contentType: MIME_MAP[ext] }
-        }
+    for (const ext of LOCAL_EXTS) {
+      const iconPath = path.join(ICONS_DIR, `${slug}${ext}`)
+      try {
+        const buffer = await fs.readFile(iconPath)
+        return { buffer, contentType: MIME_MAP[ext] }
+      } catch {
+        // try next extension
       }
     }
   } catch (error) {
