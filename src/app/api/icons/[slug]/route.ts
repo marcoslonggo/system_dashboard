@@ -67,13 +67,26 @@ const buildCandidates = (slug: string) => {
   return Array.from(candidates).filter(Boolean)
 }
 
+const LOCAL_EXTS = ['.svg', '.png', '.jpg', '.jpeg', '.webp']
+const MIME_MAP: Record<string, string> = {
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp'
+}
+
 const readLocalIcon = async (slug: string) => {
-  const iconPath = path.join(ICONS_DIR, `${slug}.svg`)
-  try {
-    return await fs.readFile(iconPath)
-  } catch {
-    return null
+  for (const ext of LOCAL_EXTS) {
+    const iconPath = path.join(ICONS_DIR, `${slug}${ext}`)
+    try {
+      const file = await fs.readFile(iconPath)
+      return { buffer: file, contentType: MIME_MAP[ext] }
+    } catch {
+      // try next extension
+    }
   }
+  return null
 }
 
 const fetchRemoteIcon = async (slug: string) => {
@@ -90,10 +103,10 @@ const fetchRemoteIcon = async (slug: string) => {
   }
 }
 
-const iconResponse = (payload: Buffer) =>
+const iconResponse = (payload: Buffer, contentType: string = 'image/svg+xml') =>
   new NextResponse(payload, {
     headers: {
-      'Content-Type': 'image/svg+xml',
+      'Content-Type': contentType,
       'Cache-Control': 'public, max-age=86400'
     }
   })
@@ -153,7 +166,7 @@ export async function GET(
     for (const candidate of candidates) {
       const localMatch = await readLocalIcon(candidate)
       if (localMatch) {
-        return iconResponse(localMatch)
+        return iconResponse(localMatch.buffer, localMatch.contentType)
       }
     }
 
