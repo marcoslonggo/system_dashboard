@@ -1244,6 +1244,7 @@ export default function Dashboard() {
                       onAction={(action) =>
                         handleAppAction({ id: app.systemId, type: app.systemType }, app.id, action)
                       }
+                      onPickIcon={setIconPickerTarget}
                     />
                   ))}
                 </div>
@@ -1343,9 +1344,10 @@ type SortableAppCardProps = {
   app: AggregatedApp
   onAction: (action: 'start' | 'stop' | 'restart') => void
   minWidth: number
+  onPickIcon?: (app: AggregatedApp | null) => void
 }
 
-function SortableAppCard({ app, onAction, minWidth }: SortableAppCardProps) {
+function SortableAppCard({ app, onAction, minWidth, onPickIcon }: SortableAppCardProps) {
   const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
     id: app.globalId
   })
@@ -1375,12 +1377,12 @@ function SortableAppCard({ app, onAction, minWidth }: SortableAppCardProps) {
               {meta.label}
             </Badge>
             <div className="flex items-center gap-1">
-              {app.slug && (
+              {app.slug && onPickIcon && (
                 <Button
                   variant="ghost"
                   size="icon"
                   className="h-6 w-6 text-muted-foreground"
-                  onClick={() => setIconPickerTarget(app)}
+                  onClick={() => onPickIcon(app)}
                   title="Customize icon"
                 >
                   <ImageIcon className="h-3.5 w-3.5" />
