@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db'
 
 export async function PUT(
   request: NextRequest,
-  { params }: { params: { slug: string } }
+  context: { params: Promise<{ slug: string }> }
 ) {
   try {
     const body = await request.json()
@@ -13,10 +13,12 @@ export async function PUT(
       return NextResponse.json({ error: 'iconSlug is required' }, { status: 400 })
     }
 
+    const { slug } = await context.params
+
     const result = await prisma.appIconOverride.upsert({
-      where: { slug: params.slug },
+      where: { slug },
       update: { iconSlug },
-      create: { slug: params.slug, iconSlug }
+      create: { slug, iconSlug }
     })
 
     return NextResponse.json({ success: true, data: result })
@@ -28,10 +30,11 @@ export async function PUT(
 
 export async function DELETE(
   _request: NextRequest,
-  { params }: { params: { slug: string } }
+  context: { params: Promise<{ slug: string }> }
 ) {
   try {
-    await prisma.appIconOverride.delete({ where: { slug: params.slug } })
+    const { slug } = await context.params
+    await prisma.appIconOverride.delete({ where: { slug } })
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('Failed to delete icon override', error)
