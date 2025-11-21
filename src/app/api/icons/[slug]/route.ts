@@ -2,12 +2,28 @@ import { NextRequest, NextResponse } from 'next/server'
 import { promises as fs } from 'fs'
 import path from 'path'
 
+export const dynamic = 'force-dynamic'
+
 const ICONS_DIR = path.join(process.cwd(), 'public', 'icons')
 const DEFAULT_ICON_PATH = path.join(ICONS_DIR, 'default.svg')
 const REMOTE_BASE = 'https://raw.githubusercontent.com/walkxcode/dashboard-icons/main/svg'
 
 const vendorPrefixes = ['binhex-', 'linuxserver-', 'linuxserverio-', 'lscr-']
 const suffixes = ['-vpn', '-docker', '-container']
+
+const slugAliases: Record<string, string[]> = {
+  jacket: ['jackett'],
+  radarr: ['binhex-radarr'],
+  sonarr: ['binhex-sonarr'],
+  qbittorrentvpn: ['qbittorrent'],
+  qbittorrent: ['qbittorrentvpn'],
+  homeassistant: ['home-assistant'],
+  booklore: ['mariadb-booklore'],
+  mediaserver: ['plex', 'emby', 'jellyfin'],
+  valheim: ['valheim-server'],
+  kiwix: ['kiwix-serve'],
+  livekit: ['livekit-server']
+}
 
 const sanitizeSlug = (slug: string) => {
   const cleaned = slug.toLowerCase().replace(/[^a-z0-9-]/g, '')
@@ -38,6 +54,14 @@ const buildCandidates = (slug: string) => {
         candidates.add(slug.slice(prefix.length, -suffix.length))
       }
     })
+  })
+
+  const expanded = Array.from(candidates)
+  expanded.forEach((candidate) => {
+    const aliases = slugAliases[candidate]
+    if (aliases) {
+      aliases.forEach((alias) => candidates.add(alias))
+    }
   })
 
   return Array.from(candidates).filter(Boolean)
