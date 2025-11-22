@@ -1019,7 +1019,7 @@ export default function Dashboard() {
     }
   }
 
-  const SettingsContent = ({ padded = false }: { padded?: boolean }) => (
+  const renderSettingsContent = (padded = false) => (
     <div className={cn('space-y-6', padded && 'pb-4')}>
       <div className="space-y-4">
         <div>
@@ -1518,18 +1518,14 @@ export default function Dashboard() {
                     Settings
                   </DialogTrigger>
                 </Button>
-                <DialogContent
-                  className="max-w-4xl max-h-[90vh] overflow-y-auto"
-                  onOpenAutoFocus={(event) => event.preventDefault()}
-                  onFocusOutside={(event) => event.preventDefault()}
-                >
+                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>Dashboard Settings</DialogTitle>
                     <DialogDescription>
                       Manage monitored systems and tweak dashboard preferences.
                     </DialogDescription>
                   </DialogHeader>
-                  <SettingsContent />
+                  {renderSettingsContent()}
                 </DialogContent>
               </Dialog>
             </div>
@@ -1568,19 +1564,19 @@ export default function Dashboard() {
                       <span className="text-xs text-muted-foreground">Pause to save battery</span>
                     </div>
                     <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
+                </div>
+                <div className="rounded-lg border">
+                  <div className="border-b px-4 py-3">
+                    <p className="text-sm font-semibold">Settings</p>
+                    <p className="text-xs text-muted-foreground">Manage systems & preferences</p>
                   </div>
-                  <div className="rounded-lg border">
-                    <div className="border-b px-4 py-3">
-                      <p className="text-sm font-semibold">Settings</p>
-                      <p className="text-xs text-muted-foreground">Manage systems & preferences</p>
-                    </div>
-                    <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
-                      <SettingsContent padded />
-                    </div>
+                  <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
+                    {renderSettingsContent(true)}
                   </div>
                 </div>
-              </DrawerContent>
-            </Drawer>
+              </div>
+            </DrawerContent>
+          </Drawer>
           </div>
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
