@@ -446,7 +446,7 @@ export default function Dashboard() {
 
   // Auto-refresh effect
   useEffect(() => {
-    if (!autoRefresh) return
+    if (!autoRefresh || settingsOpen) return
     const interval = setInterval(() => {
       fetchSystems()
       if (nutConfigured) {
@@ -454,7 +454,7 @@ export default function Dashboard() {
       }
     }, config.refreshInterval)
     return () => clearInterval(interval)
-  }, [autoRefresh, config.refreshInterval, fetchNutStatus, fetchSystems, nutConfigured])
+  }, [autoRefresh, config.refreshInterval, fetchNutStatus, fetchSystems, nutConfigured, settingsOpen])
 
   // Initial data fetch
   useEffect(() => {
