@@ -154,6 +154,24 @@ const deriveAppIcon = (provided?: string, slug?: string, name?: string) => {
   return { primary: DOCKER_ICON_FALLBACK, fallback: DOCKER_ICON_FALLBACK }
 }
 
+const normalizeAppUrl = (url?: string | null) => {
+  if (!url) return null
+  const trimmed = url.trim()
+  if (!trimmed) return null
+  try {
+    new URL(trimmed)
+    return trimmed
+  } catch {
+    const patched = `http://${trimmed}`
+    try {
+      new URL(patched)
+      return patched
+    } catch {
+      return null
+    }
+  }
+}
+
 const getStatusColor = (status: string) => {
   switch (status) {
     case 'online':
@@ -1553,6 +1571,7 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile }: Sort
   const hasCpu = typeof app.cpu === 'number'
   const hasMemory = typeof app.memory === 'number'
   const fallbackIcon = app.fallbackIcon || DOCKER_ICON_FALLBACK
+  const normalizedUrl = normalizeAppUrl(app.url)
   const effectiveMinWidth = isMobile ? Math.min(minWidth, 380) : minWidth
   const style = isMobile
     ? {}
@@ -1637,9 +1656,9 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile }: Sort
             </div>
           </CardContent>
           <CardContent className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
-            {app.url && (
+            {normalizedUrl && (
               <Button variant="default" size="sm" asChild>
-                <a href={app.url} target="_blank" rel="noopener noreferrer">
+                <a href={normalizedUrl} target="_blank" rel="noopener noreferrer">
                   Open
                 </a>
               </Button>
@@ -1755,9 +1774,9 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile }: Sort
               Container metrics not available from this system.
             </p>
           )}
-          {app.url && (
+          {normalizedUrl && (
             <a
-              href={app.url}
+              href={normalizedUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="block text-xs text-muted-foreground underline underline-offset-2"
@@ -1766,9 +1785,9 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile }: Sort
             </a>
           )}
           <div className="flex flex-wrap gap-2">
-            {app.url && (
+            {normalizedUrl && (
               <Button variant="outline" size="sm" asChild>
-                <a href={app.url} target="_blank" rel="noopener noreferrer">
+                <a href={normalizedUrl} target="_blank" rel="noopener noreferrer">
                   Open
                 </a>
               </Button>
