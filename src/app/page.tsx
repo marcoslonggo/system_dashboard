@@ -375,6 +375,11 @@ export default function Dashboard() {
     window.localStorage.setItem(DASHBOARD_PREFS_STORAGE_KEY, JSON.stringify(config))
   }, [config])
 
+  const nutConfigured =
+    nutConfig.enabled &&
+    nutConfig.host.trim().length > 0 &&
+    nutConfig.username.trim().length > 0
+
   const fetchNutStatus = useCallback(async () => {
     if (!nutConfigured) {
       setNutStatus(null)
