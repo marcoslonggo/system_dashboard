@@ -490,21 +490,36 @@ export default function Dashboard() {
       if (!trimmed) {
         return { url: null, guessed: false, source }
       }
-      if (/^https?:\/\//i.test(trimmed)) {
-        return { url: trimmed, guessed: false, source }
-      }
+      const lower = trimmed.toLowerCase()
+      const candidates: { url: string; guessed: boolean }[] = (() => {
+        if (lower.startsWith('http://')) {
+          return [
+            { url: trimmed, guessed: false },
+            { url: trimmed.replace(/^http:\/\//i, 'https://'), guessed: true }
+          ]
+        }
+        if (lower.startsWith('https://')) {
+          return [
+            { url: trimmed, guessed: false },
+            { url: trimmed.replace(/^https:\/\//i, 'http://'), guessed: true }
+          ]
+        }
+        return [
+          { url: `http://${trimmed}`, guessed: true },
+          { url: `https://${trimmed}`, guessed: true }
+        ]
+      })()
 
-      const candidates = [`http://${trimmed}`, `https://${trimmed}`]
       for (const candidate of candidates) {
         try {
-          await fetch(candidate, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal })
-          return { url: candidate, guessed: true, source }
+          await fetch(candidate.url, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal })
+          return { url: candidate.url, guessed: candidate.guessed, source }
         } catch {
           // try next candidate
         }
       }
 
-      return { url: `http://${trimmed}`, guessed: true, source }
+      return { url: candidates[0]?.url ?? null, guessed: true, source }
     },
     []
   )
@@ -1829,7 +1844,7 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile, resolv
               rel="noopener noreferrer"
               className="block text-xs text-muted-foreground underline underline-offset-2"
             >
-              {app.url}
+              {normalizedUrl}
             </a>
           )}
           <div className="flex flex-wrap gap-2">
