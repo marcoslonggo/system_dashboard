@@ -1,0 +1,136 @@
+import net from 'net'
+
+export type NutQueryOptions = {
+  host: string
+  port?: number
+  username?: string
+  password?: string
+  upsName?: string | null
+  timeoutMs?: number
+}
+
+export type NutStatus = {
+  upsName: string
+  status?: string
+  charge?: number
+  runtimeSeconds?: number
+  load?: number
+  inputVoltage?: number
+  outputVoltage?: number
+}
+
+const DEFAULT_PORT = 3493
+const DEFAULT_TIMEOUT = 4000
+
+const parseVarValue = (line: string) => {
+  // Expect: VAR <ups> <key> "<value>"
+  const match = line.match(/^VAR\s+\S+\s+(\S+)\s+"(.+)"$/)
+  if (!match) return null
+  return { key: match[1], value: match[2] }
+}
+
+export async function queryNutStatus(options: NutQueryOptions): Promise<NutStatus> {
+  const { host, port = DEFAULT_PORT, username, password, upsName, timeoutMs = DEFAULT_TIMEOUT } = options
+
+  const socket = net.createConnection({ host, port })
+  socket.setEncoding('utf8')
+  socket.setTimeout(timeoutMs)
+
+  let buffer = ''
+  const queue: ((line: string) => void)[] = []
+  const nextLine = (timeout = timeoutMs) =>
+    new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('NUT read timeout')), timeout)
+      queue.push((line) => {
+        clearTimeout(timer)
+        resolve(line)
+      })
+    })
+
+  socket.on('data', (chunk) => {
+    buffer += chunk
+    let idx
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, idx).trim()
+      buffer = buffer.slice(idx + 1)
+      const resolver = queue.shift()
+      if (resolver) resolver(line)
+    }
+  })
+
+  const send = (cmd: string) =>
+    new Promise<void>((resolve, reject) => {
+      socket.write(`${cmd}\n`, (err) => {
+        if (err) reject(err)
+        else resolve()
+      })
+    })
+
+  const close = () => {
+    socket.end()
+    socket.destroy()
+  }
+
+  try {
+    const hello = await nextLine()
+    if (!hello.startsWith('OK')) throw new Error(`NUT greeting failed: ${hello}`)
+
+    if (username) {
+      await send(`USERNAME ${username}`)
+      const res = await nextLine()
+      if (!res.startsWith('OK')) throw new Error(`NUT username rejected: ${res}`)
+    }
+    if (password) {
+      await send(`PASSWORD ${password}`)
+      const res = await nextLine()
+      if (!res.startsWith('OK')) throw new Error(`NUT password rejected: ${res}`)
+    }
+
+    let resolvedUps = upsName || ''
+    if (!resolvedUps) {
+      await send('LIST UPS')
+      let line = await nextLine()
+      while (line && !line.startsWith('END LIST UPS')) {
+        if (line.startsWith('UPS ')) {
+          const parts = line.split(/\s+/)
+          resolvedUps = parts[1]
+          break
+        }
+        line = await nextLine()
+      }
+      if (!resolvedUps) throw new Error('No UPS found on server')
+    }
+
+    const varsToFetch = [
+      'ups.status',
+      'battery.charge',
+      'battery.runtime',
+      'ups.load',
+      'input.voltage',
+      'output.voltage'
+    ]
+
+    const results: Record<string, string> = {}
+
+    for (const key of varsToFetch) {
+      await send(`GET VAR ${resolvedUps} ${key}`)
+      const line = await nextLine()
+      const parsed = parseVarValue(line)
+      if (parsed && parsed.key === key) {
+        results[key] = parsed.value
+      }
+    }
+
+    const status: NutStatus = { upsName: resolvedUps }
+    if (results['ups.status']) status.status = results['ups.status']
+    if (results['battery.charge']) status.charge = Number(results['battery.charge'])
+    if (results['battery.runtime']) status.runtimeSeconds = Number(results['battery.runtime'])
+    if (results['ups.load']) status.load = Number(results['ups.load'])
+    if (results['input.voltage']) status.inputVoltage = Number(results['input.voltage'])
+    if (results['output.voltage']) status.outputVoltage = Number(results['output.voltage'])
+
+    return status
+  } finally {
+    close()
+  }
+}

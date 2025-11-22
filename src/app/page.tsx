@@ -39,7 +39,9 @@ import {
   Image as ImageIcon,
   X,
   Search,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Battery,
+  PlugZap
 } from 'lucide-react'
 import { validateHost, validatePort } from '@/lib/system-config-validation'
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -84,6 +86,26 @@ interface AggregatedApp extends App {
 interface DashboardPreferences {
   refreshInterval: number
   notifications: boolean
+}
+
+interface NutConfig {
+  host: string
+  port: number
+  username: string
+  password?: string
+  upsName?: string
+  enabled: boolean
+  hasPassword?: boolean
+}
+
+interface NutStatus {
+  upsName: string
+  status?: string
+  charge?: number
+  runtimeSeconds?: number
+  load?: number
+  inputVoltage?: number
+  outputVoltage?: number
 }
 
 interface StoredSystemConfig {
@@ -281,6 +303,18 @@ export default function Dashboard() {
   const [iconPickerTarget, setIconPickerTarget] = useState<AggregatedApp | null>(null)
   const [iconSearch, setIconSearch] = useState('')
   const [prefetchedIcons, setPrefetchedIcons] = useState<Record<string, boolean>>({})
+  const [nutConfig, setNutConfig] = useState<NutConfig>({
+    host: '',
+    port: 3493,
+    username: '',
+    password: '',
+    upsName: '',
+    enabled: false,
+    hasPassword: false
+  })
+  const [nutStatus, setNutStatus] = useState<NutStatus | null>(null)
+  const [nutLoading, setNutLoading] = useState(false)
+  const [nutError, setNutError] = useState<string | null>(null)
   const prefsHydratedRef = useRef(false)
   const isMobile = useIsMobile()
   const sensors = useSensors(
@@ -341,6 +375,54 @@ export default function Dashboard() {
     window.localStorage.setItem(DASHBOARD_PREFS_STORAGE_KEY, JSON.stringify(config))
   }, [config])
 
+  const fetchNutStatus = useCallback(async () => {
+    if (!nutConfigured) {
+      setNutStatus(null)
+      setNutError(null)
+      return
+    }
+    try {
+      setNutLoading(true)
+      setNutError(null)
+      const res = await fetch('/api/nut-status')
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setNutError(data?.error || 'NUT status unavailable')
+        setNutStatus(null)
+        return
+      }
+      const data = await res.json()
+      if (data?.success) {
+        setNutStatus(data.data)
+      }
+    } catch (error) {
+      setNutError('Failed to reach UPS')
+      setNutStatus(null)
+    } finally {
+      setNutLoading(false)
+    }
+  }, [nutConfigured])
+
+  const fetchNutConfig = useCallback(async () => {
+    try {
+      const res = await fetch('/api/nut-config')
+      if (!res.ok) return
+      const data = await res.json()
+      if (data?.data) {
+        setNutConfig((prev) => ({
+          ...prev,
+          ...data.data,
+          password: ''
+        }))
+        if (data.data.enabled && data.data.host) {
+          await fetchNutStatus()
+        }
+      }
+    } catch (error) {
+      console.warn('Failed to load NUT config', error)
+    }
+  }, [fetchNutStatus])
+
   const fetchSystems = useCallback(async () => {
     try {
       const response = await fetch('/api/systems')
@@ -362,14 +444,24 @@ export default function Dashboard() {
     if (!autoRefresh) return
     const interval = setInterval(() => {
       fetchSystems()
+      if (nutConfigured) {
+        fetchNutStatus()
+      }
     }, config.refreshInterval)
     return () => clearInterval(interval)
-  }, [autoRefresh, config.refreshInterval, fetchSystems])
+  }, [autoRefresh, config.refreshInterval, fetchNutStatus, fetchSystems, nutConfigured])
 
   // Initial data fetch
   useEffect(() => {
     fetchSystems()
-  }, [fetchSystems])
+    fetchNutConfig()
+  }, [fetchSystems, fetchNutConfig])
+
+  useEffect(() => {
+    if (nutConfigured) {
+      fetchNutStatus()
+    }
+  }, [fetchNutStatus, nutConfigured])
 
   useEffect(() => {
     if (isMobile) {
@@ -835,6 +927,44 @@ export default function Dashboard() {
     [fetchSystems, iconCatalog, prefetchIcon, refreshIconOverrides]
   )
 
+  const handleSaveNutConfig = useCallback(async () => {
+    try {
+      setNutLoading(true)
+      setNutError(null)
+      const payload: any = {
+        host: nutConfig.host.trim(),
+        port: nutConfig.port,
+        username: nutConfig.username.trim(),
+        upsName: nutConfig.upsName?.trim() || null,
+        enabled: nutConfig.enabled
+      }
+      if (nutConfig.password && nutConfig.password.trim()) {
+        payload.password = nutConfig.password.trim()
+      }
+      const res = await fetch('/api/nut-config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to save NUT config')
+      }
+      const data = await res.json()
+      setNutConfig((prev) => ({
+        ...prev,
+        ...data.data,
+        password: '',
+        hasPassword: true
+      }))
+      await fetchNutStatus()
+    } catch (error: any) {
+      setNutError(error?.message || 'Failed to save NUT config')
+    } finally {
+      setNutLoading(false)
+    }
+  }, [fetchNutStatus, nutConfig])
+
   const handleAppAction = async (
     system: { id?: string; type: 'truenas' | 'unraid' },
     appId: string,
@@ -1240,6 +1370,96 @@ export default function Dashboard() {
           <Label htmlFor="notifications">Enable notifications</Label>
         </div>
       </div>
+
+      <Separator />
+
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-lg font-medium">UPS (NUT) Monitoring</h3>
+            <p className="text-sm text-muted-foreground">
+              Connect to a Network UPS Tools (NUT) daemon to show charge/runtime in the header.
+            </p>
+          </div>
+          <span
+            className={cn(
+              'rounded-full px-3 py-1 text-xs',
+              nutOnline ? 'bg-green-100 text-green-800' : 'bg-muted text-foreground'
+            )}
+          >
+            {nutOnline ? 'Online' : 'Offline'}
+          </span>
+        </div>
+        {nutError && (
+          <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {nutError}
+          </div>
+        )}
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="space-y-2">
+            <Label>Host/IP</Label>
+            <Input
+              value={nutConfig.host}
+              onChange={(e) => setNutConfig((prev) => ({ ...prev, host: e.target.value }))}
+              placeholder="192.168.1.10"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Port</Label>
+            <Input
+              type="number"
+              value={nutConfig.port}
+              onChange={(e) => setNutConfig((prev) => ({ ...prev, port: Number(e.target.value) }))}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Username</Label>
+            <Input
+              value={nutConfig.username}
+              onChange={(e) => setNutConfig((prev) => ({ ...prev, username: e.target.value }))}
+              placeholder="upsmon"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Password</Label>
+            <Input
+              type="password"
+              value={nutConfig.password}
+              onChange={(e) => setNutConfig((prev) => ({ ...prev, password: e.target.value }))}
+              placeholder={nutConfig.hasPassword ? '•••••••• (leave blank to keep)' : ''}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>UPS Name (optional)</Label>
+            <Input
+              value={nutConfig.upsName || ''}
+              onChange={(e) => setNutConfig((prev) => ({ ...prev, upsName: e.target.value }))}
+              placeholder="auto-detect first UPS"
+            />
+          </div>
+          <div className="flex items-center gap-2 pt-6">
+            <Switch
+              checked={nutConfig.enabled}
+              onCheckedChange={(checked) => setNutConfig((prev) => ({ ...prev, enabled: checked }))}
+            />
+            <Label>Enabled</Label>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={fetchNutStatus} disabled={nutLoading}>
+            {nutLoading ? 'Testing...' : 'Test connection'}
+          </Button>
+          <Button onClick={handleSaveNutConfig} disabled={nutLoading}>
+            Save UPS settings
+          </Button>
+          {nutStatus && nutOnline && (
+            <span className="text-xs text-muted-foreground">
+              {nutStatus.upsName}: {nutCharge !== null ? `${nutCharge}%` : '—'} charge
+              {nutRuntimeMinutes !== null ? ` • ${nutRuntimeMinutes}m runtime` : ''}
+            </span>
+          )}
+        </div>
+      </div>
     </div>
   )
 
@@ -1258,6 +1478,17 @@ export default function Dashboard() {
     iconPickerTarget?.icon ||
     iconPickerTarget?.fallbackIcon ||
     DOCKER_ICON_FALLBACK
+  const nutRuntimeMinutes =
+    typeof nutStatus?.runtimeSeconds === 'number'
+      ? Math.max(0, Math.round(nutStatus.runtimeSeconds / 60))
+      : null
+  const nutCharge = typeof nutStatus?.charge === 'number' ? nutStatus.charge : null
+  const nutOnline =
+    nutStatus?.status && nutStatus.status.toLowerCase().includes('online') && !nutError
+  const nutConfigured =
+    nutConfig.enabled &&
+    nutConfig.host.trim().length > 0 &&
+    nutConfig.username.trim().length > 0
 
   return (
     <div className="min-h-screen bg-background">
@@ -1317,6 +1548,17 @@ export default function Dashboard() {
                   </div>
                   <div className="flex items-center justify-between rounded-lg border px-4 py-3">
                     <div className="flex flex-col gap-1">
+                      <span className="text-sm font-medium">UPS</span>
+                      <span className="text-xs text-muted-foreground">
+                        {nutOnline ? 'Online' : 'Offline'}
+                        {nutCharge !== null ? ` • ${nutCharge}%` : ''}
+                        {nutRuntimeMinutes !== null ? ` • ${nutRuntimeMinutes}m` : ''}
+                      </span>
+                    </div>
+                    <Battery className="h-5 w-5 text-primary" />
+                  </div>
+                  <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+                    <div className="flex flex-col gap-1">
                       <span className="text-sm font-medium">Auto Refresh</span>
                       <span className="text-xs text-muted-foreground">Pause to save battery</span>
                     </div>
@@ -1340,6 +1582,14 @@ export default function Dashboard() {
               <Activity className="h-4 w-4" />
               <span>Last updated: {lastUpdatedLabel}</span>
               <span className="rounded-full bg-muted px-2 py-1 text-xs text-foreground">{appTotalsLabel}</span>
+              <span className="hidden items-center gap-2 rounded-full border px-2 py-1 text-xs text-foreground sm:flex">
+                <PlugZap className="h-3.5 w-3.5 text-primary" />
+                <span>{nutOnline ? 'UPS Online' : 'UPS Offline'}</span>
+                {nutCharge !== null && <span className="text-muted-foreground">{nutCharge}%</span>}
+                {nutRuntimeMinutes !== null && (
+                  <span className="text-muted-foreground">{nutRuntimeMinutes}m</span>
+                )}
+              </span>
             </div>
             <div className="w-full md:max-w-xl">
               <div className="relative">
