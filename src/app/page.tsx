@@ -315,6 +315,7 @@ export default function Dashboard() {
   const [nutStatus, setNutStatus] = useState<NutStatus | null>(null)
   const [nutLoading, setNutLoading] = useState(false)
   const [nutError, setNutError] = useState<string | null>(null)
+  const [nutMessage, setNutMessage] = useState<string | null>(null)
   const prefsHydratedRef = useRef(false)
   const isMobile = useIsMobile()
   const sensors = useSensors(
@@ -375,6 +376,20 @@ export default function Dashboard() {
     window.localStorage.setItem(DASHBOARD_PREFS_STORAGE_KEY, JSON.stringify(config))
   }, [config])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (typeof window.crypto === 'object' && typeof window.crypto.randomUUID !== 'function') {
+      window.crypto.randomUUID = () => {
+        const bytes = new Uint8Array(16)
+        window.crypto.getRandomValues(bytes)
+        bytes[6] = (bytes[6] & 0x0f) | 0x40
+        bytes[8] = (bytes[8] & 0x3f) | 0x80
+        const hex = Array.from(bytes, (n) => n.toString(16).padStart(2, '0')).join('')
+        return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+      }
+    }
+  }, [])
+
   const nutConfigured =
     nutConfig.enabled &&
     nutConfig.host.trim().length > 0 &&
@@ -384,11 +399,13 @@ export default function Dashboard() {
     if (!nutConfigured) {
       setNutStatus(null)
       setNutError(null)
+      setNutMessage(null)
       return
     }
     try {
       setNutLoading(true)
       setNutError(null)
+      setNutMessage(null)
       const res = await fetch('/api/nut-status')
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -399,6 +416,15 @@ export default function Dashboard() {
       const data = await res.json()
       if (data?.success) {
         setNutStatus(data.data)
+        const charge = data.data?.charge
+        const runtime = data.data?.runtimeSeconds
+        const runtimeMinutes =
+          typeof runtime === 'number' ? Math.max(0, Math.round(runtime / 60)) : null
+        const parts = [
+          charge !== undefined ? `${charge}%` : null,
+          runtimeMinutes !== null ? `${runtimeMinutes}m runtime` : null
+        ].filter(Boolean)
+        setNutMessage(`UPS online${parts.length ? ` • ${parts.join(' • ')}` : ''}`)
       }
     } catch (error) {
       setNutError('Failed to reach UPS')

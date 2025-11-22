@@ -20,7 +20,7 @@ export type NutStatus = {
 }
 
 const DEFAULT_PORT = 3493
-const DEFAULT_TIMEOUT = 4000
+const DEFAULT_TIMEOUT = 8000
 
 const parseVarValue = (line: string) => {
   // Expect: VAR <ups> <key> "<value>"
@@ -46,6 +46,12 @@ export async function queryNutStatus(options: NutQueryOptions): Promise<NutStatu
         resolve(line)
       })
     })
+
+  const failEarly = (message: string): never => {
+    socket.end()
+    socket.destroy()
+    throw new Error(message)
+  }
 
   socket.on('data', (chunk) => {
     buffer += chunk
@@ -73,33 +79,20 @@ export async function queryNutStatus(options: NutQueryOptions): Promise<NutStatu
 
   try {
     const hello = await nextLine()
-    if (!hello.startsWith('OK')) throw new Error(`NUT greeting failed: ${hello}`)
+    if (!hello.startsWith('OK')) failEarly(`NUT greeting failed: ${hello}`)
 
     if (username) {
       await send(`USERNAME ${username}`)
       const res = await nextLine()
-      if (!res.startsWith('OK')) throw new Error(`NUT username rejected: ${res}`)
+      if (!res.startsWith('OK')) failEarly(`NUT username rejected: ${res}`)
     }
     if (password) {
       await send(`PASSWORD ${password}`)
       const res = await nextLine()
-      if (!res.startsWith('OK')) throw new Error(`NUT password rejected: ${res}`)
+      if (!res.startsWith('OK')) failEarly(`NUT password rejected: ${res}`)
     }
 
-    let resolvedUps = upsName || ''
-    if (!resolvedUps) {
-      await send('LIST UPS')
-      let line = await nextLine()
-      while (line && !line.startsWith('END LIST UPS')) {
-        if (line.startsWith('UPS ')) {
-          const parts = line.split(/\s+/)
-          resolvedUps = parts[1]
-          break
-        }
-        line = await nextLine()
-      }
-      if (!resolvedUps) throw new Error('No UPS found on server')
-    }
+    const targetUps = upsName?.trim() || 'ups'
 
     const varsToFetch = [
       'ups.status',
@@ -113,15 +106,18 @@ export async function queryNutStatus(options: NutQueryOptions): Promise<NutStatu
     const results: Record<string, string> = {}
 
     for (const key of varsToFetch) {
-      await send(`GET VAR ${resolvedUps} ${key}`)
+      await send(`GET VAR ${targetUps} ${key}`)
       const line = await nextLine()
       const parsed = parseVarValue(line)
       if (parsed && parsed.key === key) {
         results[key] = parsed.value
       }
+      if (line.startsWith('ERR')) {
+        failEarly(line)
+      }
     }
 
-    const status: NutStatus = { upsName: resolvedUps }
+    const status: NutStatus = { upsName: targetUps }
     if (results['ups.status']) status.status = results['ups.status']
     if (results['battery.charge']) status.charge = Number(results['battery.charge'])
     if (results['battery.runtime']) status.runtimeSeconds = Number(results['battery.runtime'])
