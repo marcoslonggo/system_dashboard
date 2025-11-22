@@ -167,6 +167,8 @@ const normalizeAppUrl = (url?: string | null) => {
 }
 
 type ResolvedUrl = { url: string | null; guessed: boolean; source: string }
+const HTTP_PORTS = new Set([80, 81, 3000, 3001, 8080, 8081, 8880])
+const HTTPS_PORTS = new Set([443, 444, 8443, 9443])
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -483,11 +485,34 @@ export default function Dashboard() {
     if (!trimmed) {
       return { url: null, guessed: false, source }
     }
+
+    const coerceProtocol = (value: string) => {
+      try {
+        const parsed = new URL(value)
+        const port = parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80
+        if (parsed.protocol === 'https:' && HTTP_PORTS.has(port)) {
+          parsed.protocol = 'http:'
+          return parsed.toString()
+        }
+        if (parsed.protocol === 'http:' && HTTPS_PORTS.has(port)) {
+          parsed.protocol = 'https:'
+          return parsed.toString()
+        }
+        return parsed.toString()
+      } catch {
+        return null
+      }
+    }
+
     const lower = trimmed.toLowerCase()
     if (lower.startsWith('http://') || lower.startsWith('https://')) {
-      return { url: trimmed, guessed: false, source }
+      const coerced = coerceProtocol(trimmed)
+      return { url: coerced || trimmed, guessed: false, source }
     }
-    return { url: `http://${trimmed}`, guessed: true, source }
+
+    const guessed = `http://${trimmed}`
+    const coerced = coerceProtocol(guessed)
+    return { url: coerced || guessed, guessed: true, source }
   }, [])
 
   const appLinkMap = useMemo(() => {
@@ -1590,7 +1615,7 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile, resolv
   const hasCpu = typeof app.cpu === 'number'
   const hasMemory = typeof app.memory === 'number'
   const fallbackIcon = app.fallbackIcon || DOCKER_ICON_FALLBACK
-  const normalizedUrl = resolvedUrl ?? normalizeAppUrl(app.url)
+  const normalizedUrl = resolvedUrl ?? resolveAppUrl(app.url).url
   const effectiveMinWidth = isMobile ? Math.min(minWidth, 380) : minWidth
   const style = isMobile
     ? {}
@@ -1800,7 +1825,7 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile, resolv
               rel="noopener noreferrer"
               className="block text-xs text-muted-foreground underline underline-offset-2"
             >
-              {normalizedUrl}
+              {normalizedUrl.replace(/\/$/, '')}
             </a>
           )}
           <div className="flex flex-wrap gap-2">
