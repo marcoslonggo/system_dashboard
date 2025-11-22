@@ -14,6 +14,7 @@ import { Switch } from '@/components/ui/switch'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer'
 import { cn } from '@/lib/utils'
 import { slugify as sharedSlugify } from '@/lib/slugify'
 import { Slider } from '@/components/ui/slider'
@@ -36,9 +37,13 @@ import {
   GripVertical,
   ChevronDown,
   Image as ImageIcon,
-  X
+  X,
+  Search,
+  SlidersHorizontal
 } from 'lucide-react'
 import { validateHost, validatePort } from '@/lib/system-config-validation'
+import { useIsMobile } from '@/hooks/use-mobile'
+import { toast } from 'sonner'
 
 interface SystemInfo {
   id?: string
@@ -231,13 +236,14 @@ const getConnectionSignature = (form: SystemConfigForm) =>
 
 export default function Dashboard() {
   const [systems, setSystems] = useState<SystemInfo[]>([])
-
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [systemDetailsOpen, setSystemDetailsOpen] = useState<Record<string, boolean>>({})
   const [cardMinWidth, setCardMinWidth] = useState(DEFAULT_CARD_WIDTH)
   const [appOrder, setAppOrder] = useState<string[]>([])
+  const [searchTerm, setSearchTerm] = useState('')
+  const [mobileControlsOpen, setMobileControlsOpen] = useState(false)
+  const [expandedSystem, setExpandedSystem] = useState<string | null>(null)
   const [config, setConfig] = useState<DashboardPreferences>({
     refreshInterval: 5000,
     notifications: true
@@ -257,7 +263,9 @@ export default function Dashboard() {
   const [iconCatalog, setIconCatalog] = useState<{ slug: string; url: string }[]>([])
   const [iconPickerTarget, setIconPickerTarget] = useState<AggregatedApp | null>(null)
   const [iconSearch, setIconSearch] = useState('')
+  const [prefetchedIcons, setPrefetchedIcons] = useState<Record<string, boolean>>({})
   const prefsHydratedRef = useRef(false)
+  const isMobile = useIsMobile()
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -346,6 +354,20 @@ export default function Dashboard() {
     fetchSystems()
   }, [fetchSystems])
 
+  useEffect(() => {
+    if (isMobile) {
+      setExpandedSystem(null)
+      return
+    }
+    if (!systems.length) {
+      setExpandedSystem(null)
+      return
+    }
+    if (!expandedSystem || systems.every((system) => system.name !== expandedSystem)) {
+      setExpandedSystem(systems[0].name)
+    }
+  }, [expandedSystem, isMobile, systems])
+
   const appsWithMeta = useMemo<AggregatedApp[]>(() => {
     return systems.flatMap((system) =>
       system.apps.map((app) => ({
@@ -427,6 +449,20 @@ export default function Dashboard() {
     return ordered
   }, [appsWithMeta, appOrder])
 
+  const visibleApps = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase()
+    if (!term) return orderedApps
+    return orderedApps.filter((app) => {
+      const haystack = `${app.name} ${app.systemName} ${app.slug || ''} ${app.status}`.toLowerCase()
+      return haystack.includes(term)
+    })
+  }, [orderedApps, searchTerm])
+
+  const activeSystem = useMemo(
+    () => systems.find((system) => system.name === expandedSystem) || null,
+    [expandedSystem, systems]
+  )
+
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event
@@ -449,13 +485,6 @@ export default function Dashboard() {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(CARD_WIDTH_STORAGE_KEY, String(width))
     }
-  }, [])
-
-  const handleSystemToggle = useCallback((name: string, open: boolean) => {
-    setSystemDetailsOpen((prev) => ({
-      ...prev,
-      [name]: open
-    }))
   }, [])
 
   const resetConfigForm = () => {
@@ -502,6 +531,16 @@ export default function Dashboard() {
     refreshSystemConfigs()
   }, [refreshSystemConfigs])
 
+  const prefetchIcon = useCallback((url?: string) => {
+    if (!url || typeof window === 'undefined') return
+    setPrefetchedIcons((prev) => {
+      if (prev[url]) return prev
+      const img = new Image()
+      img.src = url
+      return { ...prev, [url]: true }
+    })
+  }, [])
+
   useEffect(() => {
     const fetchCatalog = async () => {
       try {
@@ -517,6 +556,17 @@ export default function Dashboard() {
     refreshIconOverrides()
     fetchCatalog()
   }, [refreshIconOverrides])
+
+  useEffect(() => {
+    if (!iconPickerTarget?.slug) return
+    const overrideSlug = iconOverrides[iconPickerTarget.slug]
+    const catalogEntry = iconCatalog.find((entry) => entry.slug === overrideSlug)
+    if (catalogEntry?.url) {
+      prefetchIcon(catalogEntry.url)
+    } else {
+      prefetchIcon(iconPickerTarget.icon)
+    }
+  }, [iconCatalog, iconOverrides, iconPickerTarget, prefetchIcon])
 
   useEffect(() => {
     if (!isAddMode) return
@@ -671,6 +721,10 @@ export default function Dashboard() {
   const handleIconOverrideChange = useCallback(
     async (targetSlug: string | undefined, iconSlug: string | null) => {
       if (!targetSlug) return
+      const selectedIcon = iconCatalog.find((icon) => icon.slug === iconSlug)
+      if (selectedIcon?.url) {
+        prefetchIcon(selectedIcon.url)
+      }
       try {
         if (iconSlug) {
           await fetch(`/api/icon-overrides/${targetSlug}`, {
@@ -687,12 +741,21 @@ export default function Dashboard() {
         await fetchSystems()
         setIconPickerTarget(null)
         setIconSearch('')
+        if (iconSlug) {
+          toast.success('Icon updated', {
+            description: `Using ${iconSlug} for ${targetSlug}`
+          })
+        } else {
+          toast.success('Icon reset', {
+            description: `Reverted ${targetSlug} to default icon`
+          })
+        }
       } catch (error) {
         console.error('Failed to update icon override', error)
         alert('Could not update icon override')
       }
     },
-    [fetchSystems, refreshIconOverrides]
+    [fetchSystems, iconCatalog, prefetchIcon, refreshIconOverrides]
   )
 
   const handleAppAction = async (
@@ -744,246 +807,89 @@ export default function Dashboard() {
     }
   }
 
-  return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <div className="border-b bg-card">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Server className="h-8 w-8 text-primary" />
-              <div>
-                <h1 className="text-2xl font-bold">System Dashboard</h1>
-                <p className="text-sm text-muted-foreground">Manage your TrueNAS and Unraid servers</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <Switch 
-                  checked={autoRefresh}
-                  onCheckedChange={setAutoRefresh}
-                />
-                <span className="text-sm">Auto Refresh</span>
-              </div>
-              <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-                <Button variant="outline" size="sm" asChild>
-                  <DialogTrigger>
-                    <Settings className="h-4 w-4 mr-2" />
-                    Settings
-                  </DialogTrigger>
-                </Button>
-              <DialogContent className="max-w-3xl">
-                <DialogHeader>
-                  <DialogTitle>Dashboard Settings</DialogTitle>
-                  <DialogDescription>
-                    Manage monitored systems and tweak dashboard preferences.
-                  </DialogDescription>
-                </DialogHeader>
-                <div className="space-y-6">
-                  <div className="space-y-4">
-                    <div>
-                      <h3 className="text-lg font-semibold">Connected Systems</h3>
-                      <p className="text-sm text-muted-foreground">
-                        Add TrueNAS or Unraid servers. API keys are stored encrypted in SQLite.
-                      </p>
-                    </div>
-                    {configError && (
-                      <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                        {configError}
-                      </div>
+  const SettingsContent = ({ padded = false }: { padded?: boolean }) => (
+    <div className={cn('space-y-6', padded && 'pb-4')}>
+      <div className="space-y-4">
+        <div>
+          <h3 className="text-lg font-semibold">Connected Systems</h3>
+          <p className="text-sm text-muted-foreground">
+            Add TrueNAS or Unraid servers. API keys are stored encrypted in SQLite.
+          </p>
+        </div>
+        {configError && (
+          <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {configError}
+          </div>
+        )}
+        <div className="space-y-3 pr-1 max-h-[60vh] overflow-y-auto">
+          {configListLoading ? (
+            <p className="text-sm text-muted-foreground">Loading systems...</p>
+          ) : systemConfigs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No systems configured yet.</p>
+          ) : (
+            systemConfigs.map((system) => {
+              const isEditing = editingConfigId === system.id
+              return (
+                <Collapsible key={system.id} open={isEditing}>
+                  <Card
+                    className={cn(
+                      'border-border/60 transition-all',
+                      isEditing && 'border-primary/60 shadow-lg ring-1 ring-primary/30'
                     )}
-                    <div className="space-y-3 pr-1 max-h-[60vh] overflow-y-auto">
-                      {configListLoading ? (
-                        <p className="text-sm text-muted-foreground">Loading systems...</p>
-                      ) : systemConfigs.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">No systems configured yet.</p>
-                      ) : (
-                        systemConfigs.map((system) => {
-                          const isEditing = editingConfigId === system.id
-                          return (
-                            <Collapsible key={system.id} open={isEditing}>
-                              <Card
-                                className={cn(
-                                  'border-border/60 transition-all',
-                                  isEditing && 'border-primary/60 shadow-lg ring-1 ring-primary/30'
-                                )}
-                              >
-                                <CardContent className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between">
-                                  <div className="space-y-1">
-                                    <div className="flex items-center gap-2">
-                                      <p className="font-medium">{system.name}</p>
-                                      {isEditing && (
-                                        <Badge variant="outline" className="border-primary text-primary shadow-sm">
-                                          Editing
-                                        </Badge>
-                                      )}
-                                    </div>
-                                    <p className="text-sm text-muted-foreground">
-                                      {system.host}:{system.port}
-                                    </p>
-                                  </div>
-                                  <Badge variant="secondary" className="capitalize">
-                                    {system.type}
-                                  </Badge>
-                                  <div className="flex items-center gap-2">
-                                    <Switch
-                                      checked={system.enabled}
-                                      onCheckedChange={(checked) => handleToggleConfigEnabled(system, checked)}
-                                    />
-                                    <span className="text-sm text-muted-foreground">
-                                      {system.enabled ? 'Enabled' : 'Disabled'}
-                                    </span>
-                                  </div>
-                                  <div className="flex gap-2">
-                                    <Button
-                                      variant="outline"
-                                      size="sm"
-                                      onClick={() =>
-                                        isEditing ? resetConfigForm() : handleEditConfig(system)
-                                      }
-                                    >
-                                      {isEditing ? 'Close' : 'Edit'}
-                                    </Button>
-                                    <Button variant="destructive" size="sm" onClick={() => handleDeleteConfig(system.id)}>
-                                      Delete
-                                    </Button>
-                                  </div>
-                                </CardContent>
-                                <CollapsibleContent className="overflow-hidden border-t border-border/70 data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down">
-                                  {isEditing && (
-                                    <div className="space-y-4 px-4 py-4 text-sm">
-                                      <div className="grid gap-4 md:grid-cols-2">
-                                        <div className="space-y-2">
-                                          <Label>Name</Label>
-                                          <Input
-                                            value={configForm.name}
-                                            onChange={(e) =>
-                                              setConfigForm((prev) => ({ ...prev, name: e.target.value }))
-                                            }
-                                            placeholder="My NAS"
-                                          />
-                                        </div>
-                                        <div className="space-y-2">
-                                          <Label>Platform</Label>
-                                          <Select
-                                            value={configForm.type}
-                                            onValueChange={(value: 'truenas' | 'unraid') =>
-                                              setConfigForm((prev) => ({ ...prev, type: value }))
-                                            }
-                                          >
-                                            <SelectTrigger>
-                                              <SelectValue />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                              <SelectItem value="truenas">TrueNAS</SelectItem>
-                                              <SelectItem value="unraid">Unraid</SelectItem>
-                                            </SelectContent>
-                                          </Select>
-                                        </div>
-                                        <div className="space-y-2">
-                                          <Label>Host/IP</Label>
-                                          <Input
-                                            value={configForm.host}
-                                            onChange={(e) =>
-                                              setConfigForm((prev) => ({ ...prev, host: e.target.value }))
-                                            }
-                                          />
-                                        </div>
-                                        <div className="space-y-2">
-                                          <Label>Port</Label>
-                                          <Input
-                                            type="number"
-                                            value={configForm.port}
-                                            onChange={(e) =>
-                                              setConfigForm((prev) => ({
-                                                ...prev,
-                                                port: Number(e.target.value)
-                                              }))
-                                            }
-                                          />
-                                        </div>
-                                        <div className="space-y-2 md:col-span-2">
-                                          <Label>API Key</Label>
-                                          <Input
-                                            type="password"
-                                            value={configForm.apiKey}
-                                            onChange={(e) =>
-                                              setConfigForm((prev) => ({ ...prev, apiKey: e.target.value }))
-                                            }
-                                            placeholder="Leave blank to keep existing key"
-                                          />
-                                        </div>
-                                      </div>
-                                      <div className="grid gap-3 md:grid-cols-3">
-                                        <div className="flex items-center gap-2">
-                                          <Switch
-                                            checked={configForm.useSsl}
-                                            onCheckedChange={(checked) =>
-                                              setConfigForm((prev) => ({ ...prev, useSsl: checked }))
-                                            }
-                                          />
-                                          <Label>Use HTTPS</Label>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                          <Switch
-                                            checked={configForm.allowSelfSigned}
-                                            onCheckedChange={(checked) =>
-                                              setConfigForm((prev) => ({ ...prev, allowSelfSigned: checked }))
-                                            }
-                                          />
-                                          <Label>Allow self-signed</Label>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                          <Switch
-                                            checked={configForm.enabled}
-                                            onCheckedChange={(checked) =>
-                                              setConfigForm((prev) => ({ ...prev, enabled: checked }))
-                                            }
-                                          />
-                                          <Label>Enabled</Label>
-                                        </div>
-                                      </div>
-                                      <div className="flex justify-end gap-2">
-                                        <Button variant="outline" onClick={resetConfigForm}>
-                                          Cancel
-                                        </Button>
-                                        <Button onClick={handleConfigSubmit} disabled={configLoading}>
-                                          Save Changes
-                                        </Button>
-                                      </div>
-                                    </div>
-                                  )}
-                                </CollapsibleContent>
-                              </Card>
-                            </Collapsible>
-                          )
-                        })
-                      )}
-                    </div>
-                    <Separator />
-                    <div className="space-y-3">
-                      {editingConfigId ? (
-                        <div className="flex flex-col gap-3 rounded-md border border-dashed border-primary/40 bg-primary/5 px-4 py-3 text-sm text-primary">
-                          <p>
-                            Editing <span className="font-medium">{editingSystem?.name || 'system'}</span>. Update the
-                            fields directly inside the expanded card above.
-                          </p>
-                          <div>
-                            <Button variant="outline" size="sm" onClick={resetConfigForm}>
-                              Cancel Editing
-                            </Button>
-                          </div>
+                  >
+                    <CardContent className="flex flex-col gap-3 py-4 md:flex-row md:items-center md:justify-between">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium">{system.name}</p>
+                          {isEditing && (
+                            <Badge variant="outline" className="border-primary text-primary shadow-sm">
+                              Editing
+                            </Badge>
+                          )}
                         </div>
-                      ) : (
-                        <>
-                          <h4 className="text-base font-medium">Add System</h4>
+                        <p className="text-sm text-muted-foreground">
+                          {system.host}:{system.port}
+                        </p>
+                      </div>
+                      <Badge variant="secondary" className="capitalize">
+                        {system.type}
+                      </Badge>
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          checked={system.enabled}
+                          onCheckedChange={(checked) => handleToggleConfigEnabled(system, checked)}
+                        />
+                        <span className="text-sm text-muted-foreground">
+                          {system.enabled ? 'Enabled' : 'Disabled'}
+                        </span>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            isEditing ? resetConfigForm() : handleEditConfig(system)
+                          }
+                        >
+                          {isEditing ? 'Close' : 'Edit'}
+                        </Button>
+                        <Button variant="destructive" size="sm" onClick={() => handleDeleteConfig(system.id)}>
+                          Delete
+                        </Button>
+                      </div>
+                    </CardContent>
+                    <CollapsibleContent className="overflow-hidden border-t border-border/70 data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down">
+                      {isEditing && (
+                        <div className="space-y-4 px-4 py-4 text-sm">
                           <div className="grid gap-4 md:grid-cols-2">
                             <div className="space-y-2">
                               <Label>Name</Label>
                               <Input
                                 value={configForm.name}
-                                onChange={(e) => setConfigForm((prev) => ({ ...prev, name: e.target.value }))}
-                                placeholder="My TrueNAS"
+                                onChange={(e) =>
+                                  setConfigForm((prev) => ({ ...prev, name: e.target.value }))
+                                }
+                                placeholder="My NAS"
                               />
                             </div>
                             <div className="space-y-2">
@@ -995,7 +901,7 @@ export default function Dashboard() {
                                 }
                               >
                                 <SelectTrigger>
-                                  <SelectValue placeholder="Select platform" />
+                                  <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
                                   <SelectItem value="truenas">TrueNAS</SelectItem>
@@ -1007,8 +913,9 @@ export default function Dashboard() {
                               <Label>Host/IP</Label>
                               <Input
                                 value={configForm.host}
-                                onChange={(e) => setConfigForm((prev) => ({ ...prev, host: e.target.value }))}
-                                placeholder="192.168.1.24"
+                                onChange={(e) =>
+                                  setConfigForm((prev) => ({ ...prev, host: e.target.value }))
+                                }
                               />
                             </div>
                             <div className="space-y-2">
@@ -1016,7 +923,12 @@ export default function Dashboard() {
                               <Input
                                 type="number"
                                 value={configForm.port}
-                                onChange={(e) => setConfigForm((prev) => ({ ...prev, port: Number(e.target.value) }))}
+                                onChange={(e) =>
+                                  setConfigForm((prev) => ({
+                                    ...prev,
+                                    port: Number(e.target.value)
+                                  }))
+                                }
                               />
                             </div>
                             <div className="space-y-2 md:col-span-2">
@@ -1024,8 +936,10 @@ export default function Dashboard() {
                               <Input
                                 type="password"
                                 value={configForm.apiKey}
-                                onChange={(e) => setConfigForm((prev) => ({ ...prev, apiKey: e.target.value }))}
-                                placeholder="Required"
+                                onChange={(e) =>
+                                  setConfigForm((prev) => ({ ...prev, apiKey: e.target.value }))
+                                }
+                                placeholder="Leave blank to keep existing key"
                               />
                             </div>
                           </div>
@@ -1033,7 +947,9 @@ export default function Dashboard() {
                             <div className="flex items-center gap-2">
                               <Switch
                                 checked={configForm.useSsl}
-                                onCheckedChange={(checked) => setConfigForm((prev) => ({ ...prev, useSsl: checked }))}
+                                onCheckedChange={(checked) =>
+                                  setConfigForm((prev) => ({ ...prev, useSsl: checked }))
+                                }
                               />
                               <Label>Use HTTPS</Label>
                             </div>
@@ -1056,95 +972,322 @@ export default function Dashboard() {
                               <Label>Enabled</Label>
                             </div>
                           </div>
-                          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                            <Button
-                              variant="outline"
-                              onClick={handleTestConnection}
-                              disabled={connectionTest.status === 'testing'}
-                            >
-                              {connectionTest.status === 'testing' ? 'Testing...' : 'Test Connection'}
-                            </Button>
-                            {connectionTest.status === 'success' && (
-                              <span className="text-sm text-green-600">{connectionTest.message}</span>
-                            )}
-                            {connectionTest.status === 'error' && (
-                              <span className="text-sm text-destructive">{connectionTest.message}</span>
-                            )}
-                            {connectionTest.status !== 'success' && (
-                              <span className="text-xs text-muted-foreground">
-                                Please test the connection before adding the system.
-                              </span>
-                            )}
-                          </div>
                           <div className="flex justify-end gap-2">
-                            <Button
-                              onClick={handleConfigSubmit}
-                              disabled={
-                                configLoading ||
-                                connectionTest.status === 'testing' ||
-                                !addModeTestPassed
-                              }
-                            >
-                              Add System
+                            <Button variant="outline" onClick={resetConfigForm}>
+                              Cancel
+                            </Button>
+                            <Button onClick={handleConfigSubmit} disabled={configLoading}>
+                              Save Changes
                             </Button>
                           </div>
-                        </>
+                        </div>
                       )}
+                    </CollapsibleContent>
+                  </Card>
+                </Collapsible>
+              )
+            })
+          )}
+        </div>
+        <Separator />
+        <div className="space-y-3">
+          {editingConfigId ? (
+            <div className="flex flex-col gap-3 rounded-md border border-dashed border-primary/40 bg-primary/5 px-4 py-3 text-sm text-primary">
+              <p>
+                Editing <span className="font-medium">{editingSystem?.name || 'system'}</span>. Update the
+                fields directly inside the expanded card above.
+              </p>
+              <div>
+                <Button variant="outline" size="sm" onClick={resetConfigForm}>
+                  Cancel Editing
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <h4 className="text-base font-medium">Add System</h4>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Name</Label>
+                  <Input
+                    value={configForm.name}
+                    onChange={(e) => setConfigForm((prev) => ({ ...prev, name: e.target.value }))}
+                    placeholder="My TrueNAS"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Platform</Label>
+                  <Select
+                    value={configForm.type}
+                    onValueChange={(value: 'truenas' | 'unraid') =>
+                      setConfigForm((prev) => ({ ...prev, type: value }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select platform" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="truenas">TrueNAS</SelectItem>
+                      <SelectItem value="unraid">Unraid</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Host/IP</Label>
+                  <Input
+                    value={configForm.host}
+                    onChange={(e) => setConfigForm((prev) => ({ ...prev, host: e.target.value }))}
+                    placeholder="192.168.1.24"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Port</Label>
+                  <Input
+                    type="number"
+                    value={configForm.port}
+                    onChange={(e) => setConfigForm((prev) => ({ ...prev, port: Number(e.target.value) }))}
+                  />
+                </div>
+                <div className="space-y-2 md:col-span-2">
+                  <Label>API Key</Label>
+                  <Input
+                    type="password"
+                    value={configForm.apiKey}
+                    onChange={(e) => setConfigForm((prev) => ({ ...prev, apiKey: e.target.value }))}
+                    placeholder="Required"
+                  />
+                </div>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={configForm.useSsl}
+                    onCheckedChange={(checked) => setConfigForm((prev) => ({ ...prev, useSsl: checked }))}
+                  />
+                  <Label>Use HTTPS</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={configForm.allowSelfSigned}
+                    onCheckedChange={(checked) =>
+                      setConfigForm((prev) => ({ ...prev, allowSelfSigned: checked }))
+                    }
+                  />
+                  <Label>Allow self-signed</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={configForm.enabled}
+                    onCheckedChange={(checked) =>
+                      setConfigForm((prev) => ({ ...prev, enabled: checked }))
+                    }
+                  />
+                  <Label>Enabled</Label>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <Button
+                  variant="outline"
+                  onClick={handleTestConnection}
+                  disabled={connectionTest.status === 'testing'}
+                >
+                  {connectionTest.status === 'testing' ? 'Testing...' : 'Test Connection'}
+                </Button>
+                {connectionTest.status === 'success' && (
+                  <span className="text-sm text-green-600">{connectionTest.message}</span>
+                )}
+                {connectionTest.status === 'error' && (
+                  <span className="text-sm text-destructive">{connectionTest.message}</span>
+                )}
+                {connectionTest.status !== 'success' && (
+                  <span className="text-xs text-muted-foreground">
+                    Please test the connection before adding the system.
+                  </span>
+                )}
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button
+                  onClick={handleConfigSubmit}
+                  disabled={
+                    configLoading ||
+                    connectionTest.status === 'testing' ||
+                    !addModeTestPassed
+                  }
+                >
+                  Add System
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <Separator />
+
+      <div className="space-y-4">
+        <h3 className="text-lg font-medium">Dashboard Preferences</h3>
+        <div className="space-y-2">
+          <Label htmlFor="refresh-interval">Refresh Interval</Label>
+          <Select
+            value={config.refreshInterval.toString()}
+            onValueChange={(value) =>
+              setConfig((prev) => ({
+                ...prev,
+                refreshInterval: parseInt(value)
+              }))
+            }
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="1000">1 second</SelectItem>
+              <SelectItem value="5000">5 seconds</SelectItem>
+              <SelectItem value="10000">10 seconds</SelectItem>
+              <SelectItem value="30000">30 seconds</SelectItem>
+              <SelectItem value="60000">1 minute</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex items-center space-x-2">
+          <Switch
+            id="notifications"
+            checked={config.notifications}
+            onCheckedChange={(checked) =>
+              setConfig((prev) => ({
+                ...prev,
+                notifications: checked
+              }))
+            }
+          />
+          <Label htmlFor="notifications">Enable notifications</Label>
+        </div>
+      </div>
+    </div>
+  )
+
+  const allowDrag = !isMobile
+  const lastUpdatedLabel = lastUpdated ? lastUpdated.toLocaleTimeString() : '—'
+  const appTotalsLabel =
+    searchTerm.trim().length > 0
+      ? `${visibleApps.length} / ${orderedApps.length} apps`
+      : `${orderedApps.length} apps`
+  const pickerOverrideSlug = iconPickerTarget?.slug ? iconOverrides[iconPickerTarget.slug] : null
+  const pickerCatalogEntry = pickerOverrideSlug
+    ? iconCatalog.find((icon) => icon.slug === pickerOverrideSlug)
+    : null
+  const pickerPreview =
+    pickerCatalogEntry?.url ||
+    iconPickerTarget?.icon ||
+    iconPickerTarget?.fallbackIcon ||
+    DOCKER_ICON_FALLBACK
+
+  return (
+    <div className="min-h-screen bg-background">
+      <div className="sticky top-0 z-20 border-b bg-card/90 backdrop-blur">
+        <div className="mx-auto flex max-w-screen-xl flex-col gap-4 px-[var(--page-gutter)] py-4">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <Server className="h-8 w-8 text-primary" />
+              <div>
+                <h1 className="text-2xl font-bold">System Dashboard</h1>
+                <p className="text-sm text-muted-foreground">Manage your TrueNAS and Unraid servers</p>
+              </div>
+            </div>
+            <div className="hidden items-center gap-4 md:flex">
+              <div className="flex items-center gap-2">
+                <Switch 
+                  checked={autoRefresh}
+                  onCheckedChange={setAutoRefresh}
+                />
+                <span className="text-sm">Auto Refresh</span>
+              </div>
+              <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+                <Button variant="outline" size="sm" className="hidden md:inline-flex" asChild>
+                  <DialogTrigger>
+                    <Settings className="mr-2 h-4 w-4" />
+                    Settings
+                  </DialogTrigger>
+                </Button>
+                <DialogContent className="max-w-4xl">
+                  <DialogHeader>
+                    <DialogTitle>Dashboard Settings</DialogTitle>
+                    <DialogDescription>
+                      Manage monitored systems and tweak dashboard preferences.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <SettingsContent />
+                </DialogContent>
+              </Dialog>
+            </div>
+            <Drawer open={mobileControlsOpen} onOpenChange={setMobileControlsOpen}>
+              <DrawerTrigger asChild>
+                <Button variant="outline" size="icon" className="md:hidden">
+                  <SlidersHorizontal className="h-5 w-5" />
+                </Button>
+              </DrawerTrigger>
+              <DrawerContent className="md:hidden">
+                <DrawerHeader>
+                  <DrawerTitle>Quick Controls</DrawerTitle>
+                </DrawerHeader>
+                <div className="space-y-4 px-[var(--page-gutter)] pb-6">
+                  <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+                    <div className="flex items-center gap-2 text-sm font-medium">
+                      <Activity className="h-4 w-4" />
+                      <span>Last updated</span>
                     </div>
+                    <span className="text-sm text-muted-foreground">{lastUpdatedLabel}</span>
                   </div>
-
-                  <Separator />
-
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-medium">Dashboard Preferences</h3>
-                    <div className="space-y-2">
-                      <Label htmlFor="refresh-interval">Refresh Interval</Label>
-                      <Select
-                        value={config.refreshInterval.toString()}
-                        onValueChange={(value) =>
-                          setConfig((prev) => ({
-                            ...prev,
-                            refreshInterval: parseInt(value)
-                          }))
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="1000">1 second</SelectItem>
-                          <SelectItem value="5000">5 seconds</SelectItem>
-                          <SelectItem value="10000">10 seconds</SelectItem>
-                          <SelectItem value="30000">30 seconds</SelectItem>
-                          <SelectItem value="60000">1 minute</SelectItem>
-                        </SelectContent>
-                      </Select>
+                  <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-sm font-medium">Auto Refresh</span>
+                      <span className="text-xs text-muted-foreground">Pause to save battery</span>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      <Switch
-                        id="notifications"
-                        checked={config.notifications}
-                        onCheckedChange={(checked) =>
-                          setConfig((prev) => ({
-                            ...prev,
-                            notifications: checked
-                          }))
-                        }
-                      />
-                      <Label htmlFor="notifications">Enable notifications</Label>
+                    <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
+                  </div>
+                  <div className="rounded-lg border">
+                    <div className="border-b px-4 py-3">
+                      <p className="text-sm font-semibold">Settings</p>
+                      <p className="text-xs text-muted-foreground">Manage systems & preferences</p>
+                    </div>
+                    <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
+                      <SettingsContent padded />
                     </div>
                   </div>
                 </div>
-              </DialogContent>
-              </Dialog>
+              </DrawerContent>
+            </Drawer>
+          </div>
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Activity className="h-4 w-4" />
+              <span>Last updated: {lastUpdatedLabel}</span>
+              <span className="rounded-full bg-muted px-2 py-1 text-xs text-foreground">{appTotalsLabel}</span>
+            </div>
+            <div className="w-full md:max-w-xl">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Search apps or systems"
+                  className="w-full pl-10"
+                />
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      <div className="container mx-auto px-4 py-6">
+      <div className="mx-auto max-w-screen-xl space-y-[var(--section-gap)] px-[var(--page-gutter)] py-6">
         {/* System Overview */}
-        <div className="mb-6 flex flex-col gap-2 md:flex-row">
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Servers</h2>
+            {!isMobile && systems.length > 0 && (
+              <span className="text-xs text-muted-foreground">Tap a chip to expand details</span>
+            )}
+          </div>
           {systems.length === 0 ? (
             <Card className="w-full border-border/60 bg-muted/50">
               <CardContent className="flex flex-col gap-2 px-4 py-5 text-sm text-muted-foreground">
@@ -1153,42 +1296,64 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           ) : (
-            systems.map((system) => (
-              <Card key={system.name} className="flex-1 border-border/60 bg-muted/40">
-                <div className="flex flex-wrap items-center gap-3 px-4 py-3 text-xs sm:text-sm text-muted-foreground">
-                  <div className="flex items-center gap-2">
-                    <div className={`h-2 w-2 rounded-full ${getStatusColor(system.status)}`} />
-                    <span className="font-semibold text-foreground">{system.name}</span>
+            <div className="rounded-[var(--panel-radius)] border border-border/60 bg-card shadow-sm">
+              <div className="flex flex-wrap gap-2 px-3 py-3 text-xs sm:text-sm">
+                {systems.map((system) => {
+                  const isActive = !isMobile && expandedSystem === system.name
+                  return (
+                    <button
+                      key={system.name}
+                      type="button"
+                      onClick={() => {
+                        if (isMobile) return
+                        setExpandedSystem((prev) => (prev === system.name ? null : system.name))
+                      }}
+                      className={cn(
+                        'flex items-center gap-3 rounded-full border px-3 py-2 transition hover:border-primary hover:text-foreground',
+                        isActive ? 'border-primary/70 bg-primary/5 shadow-sm' : 'border-border/70 bg-muted/50',
+                        isMobile && 'cursor-default'
+                      )}
+                    >
+                      <span className={`h-2 w-2 rounded-full ${getStatusColor(system.status)}`} />
+                      <span className="font-semibold text-foreground">{system.name}</span>
+                      <span className="text-muted-foreground">CPU {system.cpu}%</span>
+                      <span className="text-muted-foreground">RAM {system.memory}%</span>
+                      <span className="text-muted-foreground">Storage {system.storage}%</span>
+                    </button>
+                  )
+                })}
+              </div>
+              {!isMobile && activeSystem && (
+                <div className="flex flex-wrap gap-4 border-t px-4 py-3 text-xs sm:text-sm">
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Clock className="h-4 w-4" />
+                    <span>Uptime: {activeSystem.uptime}</span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-3 w-3" />
-                    <span>{system.uptime}</span>
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Thermometer className="h-4 w-4" />
+                    <span>Temp: {activeSystem.temperature}°C</span>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Cpu className="h-4 w-4 text-primary" />
-                    <span>{system.cpu}% CPU</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <MemoryStick className="h-4 w-4 text-primary" />
-                    <span>{system.memory}% RAM</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <HardDrive className="h-4 w-4 text-primary" />
-                    <span>{system.storage}% Storage</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Thermometer className="h-4 w-4 text-primary" />
-                    <span>{system.temperature}°C</span>
-                  </div>
-                  {typeof system.gpu === 'number' && (
-                    <div className="flex items-center gap-2">
-                      <Activity className="h-4 w-4 text-primary" />
-                      <span>{system.gpu}% GPU</span>
+                  {typeof activeSystem.gpu === 'number' && (
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Activity className="h-4 w-4" />
+                      <span>GPU: {activeSystem.gpu}%</span>
                     </div>
                   )}
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <HardDrive className="h-4 w-4" />
+                    <span>Storage: {activeSystem.storage}%</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <Cpu className="h-4 w-4" />
+                    <span>CPU: {activeSystem.cpu}%</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <MemoryStick className="h-4 w-4" />
+                    <span>Memory: {activeSystem.memory}%</span>
+                  </div>
                 </div>
-              </Card>
-            ))
+              )}
+            </div>
           )}
         </div>
 
@@ -1201,11 +1366,7 @@ export default function Dashboard() {
                 Reorder cards and manage containers from a unified view.
               </p>
             </div>
-            <div className="flex flex-col gap-3 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-end">
-              <div className="flex items-center gap-2">
-                <Activity className="h-4 w-4" />
-                Last updated: {lastUpdated ? lastUpdated.toLocaleTimeString() : '—'}
-              </div>
+            <div className="flex flex-col gap-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-end">
               <div className="flex items-center gap-3">
                 <span>Card size</span>
                 <Slider
@@ -1218,6 +1379,12 @@ export default function Dashboard() {
                 />
                 <span className="text-muted-foreground">{cardMinWidth}px</span>
               </div>
+              {isMobile && (
+                <div className="flex items-center gap-2 text-xs">
+                  <GripVertical className="h-4 w-4" />
+                  <span>Drag reordering is disabled on touch</span>
+                </div>
+              )}
             </div>
           </div>
           {orderedApps.length === 0 ? (
@@ -1226,19 +1393,30 @@ export default function Dashboard() {
                 No applications detected. Configure your systems to begin monitoring.
               </CardContent>
             </Card>
+          ) : visibleApps.length === 0 ? (
+            <Card>
+              <CardContent className="py-10 text-center text-muted-foreground">
+                {searchTerm.trim().length > 0
+                  ? 'No applications match your search.'
+                  : 'No applications available.'}
+              </CardContent>
+            </Card>
           ) : (
-            <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+            <DndContext
+              sensors={allowDrag ? sensors : []}
+              onDragEnd={allowDrag ? handleDragEnd : undefined}
+            >
               <SortableContext
-                items={orderedApps.map((app) => app.globalId)}
+                items={visibleApps.map((app) => app.globalId)}
                 strategy={rectSortingStrategy}
               >
                 <div
-                  className="grid gap-4"
+                  className="grid gap-[var(--card-gap)]"
                   style={{
                     gridTemplateColumns: `repeat(auto-fit, minmax(${cardMinWidth}px, 1fr))`
                   }}
                 >
-                  {orderedApps.map((app) => (
+                  {visibleApps.map((app) => (
                     <SortableAppCard
                       key={app.globalId}
                       app={app}
@@ -1247,6 +1425,7 @@ export default function Dashboard() {
                         handleAppAction({ id: app.systemId, type: app.systemType }, app.id, action)
                       }
                       onPickIcon={setIconPickerTarget}
+                      isMobile={isMobile}
                     />
                   ))}
                 </div>
@@ -1279,19 +1458,34 @@ export default function Dashboard() {
                   <p className="text-sm font-medium">{iconPickerTarget.name}</p>
                   <p className="text-xs text-muted-foreground">Slug: {iconPickerTarget.slug}</p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Input
-                    placeholder="Search icons..."
-                    value={iconSearch}
-                    onChange={(e) => setIconSearch(e.target.value)}
-                    className="w-64"
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={() => handleIconOverrideChange(iconPickerTarget.slug, null)}
-                  >
-                    Use default
-                  </Button>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-3 rounded-md border px-3 py-2">
+                    <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-md border bg-white">
+                      <img src={pickerPreview} alt="Selected icon preview" className="h-full w-full object-contain" />
+                    </div>
+                    <div className="text-xs">
+                      <p className="font-medium text-foreground">
+                        {pickerOverrideSlug || 'Default icon'}
+                      </p>
+                      <p className="text-muted-foreground">
+                        {pickerOverrideSlug ? 'Selected override' : 'Using generated fallback'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      placeholder="Search icons..."
+                      value={iconSearch}
+                      onChange={(e) => setIconSearch(e.target.value)}
+                      className="w-64"
+                    />
+                    <Button
+                      variant="outline"
+                      onClick={() => handleIconOverrideChange(iconPickerTarget.slug, null)}
+                    >
+                      Use default
+                    </Button>
+                  </div>
                 </div>
               </div>
               <div className="grid max-h-[60vh] grid-cols-3 gap-3 overflow-y-auto md:grid-cols-4 lg:grid-cols-5">
@@ -1347,29 +1541,154 @@ type SortableAppCardProps = {
   onAction: (action: 'start' | 'stop' | 'restart') => void
   minWidth: number
   onPickIcon?: (app: AggregatedApp | null) => void
+  isMobile: boolean
 }
 
-function SortableAppCard({ app, onAction, minWidth, onPickIcon }: SortableAppCardProps) {
+function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile }: SortableAppCardProps) {
   const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
     id: app.globalId
   })
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition
-  }
   const meta = SYSTEM_META[app.systemType]
   const HostIcon = meta.icon
   const hasCpu = typeof app.cpu === 'number'
   const hasMemory = typeof app.memory === 'number'
   const fallbackIcon = app.fallbackIcon || DOCKER_ICON_FALLBACK
+  const effectiveMinWidth = isMobile ? Math.min(minWidth, 380) : minWidth
+  const style = isMobile
+    ? {}
+    : {
+      transform: CSS.Transform.toString(transform),
+      transition
+    }
+  const dragAttributes = isMobile ? undefined : attributes
+  const dragListeners = isMobile ? undefined : listeners
+
+  const renderIcon = (sizeClass = 'h-10 w-10') => (
+    <div className={`${sizeClass} overflow-hidden rounded-md bg-muted p-1`}>
+      <img
+        src={app.icon || fallbackIcon}
+        alt={`${app.name} icon`}
+        className="h-full w-full object-contain"
+        onError={(event) => {
+          const imgEl = event.currentTarget
+          if (imgEl.dataset.fallbackUsed !== 'true' && fallbackIcon) {
+            imgEl.dataset.fallbackUsed = 'true'
+            imgEl.src = fallbackIcon
+            return
+          }
+          imgEl.onerror = null
+          imgEl.src = DOCKER_ICON_FALLBACK
+        }}
+      />
+    </div>
+  )
+
+  if (isMobile) {
+    return (
+      <div ref={setNodeRef} style={{ minWidth: `${effectiveMinWidth}px` }} className="w-full">
+        <Card className="border border-border/60">
+          <CardContent className="flex items-start gap-3 p-3">
+            {renderIcon('h-12 w-12')}
+            <div className="flex-1 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span className={`h-2 w-2 rounded-full ${getStatusColor(app.status)}`} />
+                    <p className="text-sm font-semibold">{app.name}</p>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Badge className={cn('flex items-center gap-1', meta.badgeClass)}>
+                      <HostIcon className="h-3 w-3" />
+                      {meta.label}
+                    </Badge>
+                    <span className="capitalize">{app.status}</span>
+                  </div>
+                </div>
+                {app.slug && onPickIcon && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground"
+                    onClick={() => onPickIcon(app)}
+                    title="Customize icon"
+                  >
+                    <ImageIcon className="h-4 w-4" />
+                  </Button>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                <span className="flex items-center gap-1">
+                  <Cpu className="h-3 w-3" />
+                  {hasCpu ? `${app.cpu}% CPU` : 'CPU n/a'}
+                </span>
+                <span className="flex items-center gap-1">
+                  <MemoryStick className="h-3 w-3" />
+                  {hasMemory ? `${app.memory}% RAM` : 'RAM n/a'}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Activity className="h-3 w-3" />
+                  Host {app.hostCpu}% CPU
+                </span>
+                <span className="flex items-center gap-1">
+                  <Thermometer className="h-3 w-3" />
+                  Host {app.hostMemory}% RAM
+                </span>
+              </div>
+            </div>
+          </CardContent>
+          <CardContent className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
+            {app.url && (
+              <Button variant="default" size="sm" asChild>
+                <a href={app.url} target="_blank" rel="noopener noreferrer">
+                  Open
+                </a>
+              </Button>
+            )}
+            {app.status === 'running' ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => onAction('restart')}
+                  className="flex items-center gap-1"
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Restart
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  onClick={() => onAction('stop')}
+                  className="flex items-center gap-1"
+                >
+                  <PowerOff className="h-3 w-3" />
+                  Stop
+                </Button>
+              </>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => onAction('start')}
+                className="flex items-center gap-1"
+              >
+                <Power className="h-3 w-3" />
+                Start
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    )
+  }
 
   return (
     <div
       ref={setNodeRef}
-      style={{ ...style, minWidth: `${minWidth}px` }}
+      style={{ ...style, minWidth: `${effectiveMinWidth}px` }}
       className={cn('w-full', isDragging && 'cursor-grabbing opacity-90 drop-shadow-lg')}
-      {...attributes}
-      {...listeners}
+      {...dragAttributes}
+      {...dragListeners}
     >
       <Card className={cn('h-full border border-border/60', isDragging && 'ring-2 ring-primary/40')}>
         <CardHeader className="pb-3">
@@ -1400,32 +1719,16 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon }: SortableAppCar
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 overflow-hidden rounded-md bg-muted p-1">
-                <img
-                  src={app.icon || fallbackIcon}
-                  alt={`${app.name} icon`}
-                  className="h-full w-full object-contain"
-                  onError={(event) => {
-                    const imgEl = event.currentTarget
-                    if (imgEl.dataset.fallbackUsed !== 'true' && fallbackIcon) {
-                      imgEl.dataset.fallbackUsed = 'true'
-                      imgEl.src = fallbackIcon
-                      return
-                    }
-                    imgEl.onerror = null
-                    imgEl.src = DOCKER_ICON_FALLBACK
-                  }}
-                />
-              </div>
-              <div className="text-xs text-muted-foreground">
-                <p className="font-medium text-foreground">{app.systemName}</p>
-                <div className="flex items-center gap-1">
-                  <span className={`h-1.5 w-1.5 rounded-full ${getStatusColor(app.systemStatus)}`} />
-                  <span className="capitalize">{app.systemStatus}</span>
-                </div>
+          <div className="flex items-center gap-3">
+            {renderIcon()}
+            <div className="text-xs text-muted-foreground">
+              <p className="font-medium text-foreground">{app.systemName}</p>
+              <div className="flex items-center gap-1">
+                <span className={`h-1.5 w-1.5 rounded-full ${getStatusColor(app.systemStatus)}`} />
+                <span className="capitalize">{app.systemStatus}</span>
               </div>
             </div>
+          </div>
           {(hasCpu || hasMemory) ? (
             <div className="grid grid-cols-2 gap-3">
               {hasCpu && (

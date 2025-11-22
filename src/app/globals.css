@@ -76,6 +76,10 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  --page-gutter: 1.5rem;
+  --section-gap: 1.5rem;
+  --card-gap: 1rem;
+  --panel-radius: 0.75rem;
 }
 
 .dark {
@@ -110,6 +114,15 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+}
+
+@media (max-width: 768px) {
+  :root {
+    --page-gutter: 1.1rem;
+    --section-gap: 1.1rem;
+    --card-gap: 0.85rem;
+    --panel-radius: 0.65rem;
+  }
 }
 
 @layer base {
