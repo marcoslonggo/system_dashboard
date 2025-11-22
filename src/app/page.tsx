@@ -162,15 +162,11 @@ const normalizeAppUrl = (url?: string | null) => {
     new URL(trimmed)
     return trimmed
   } catch {
-    const patched = `http://${trimmed}`
-    try {
-      new URL(patched)
-      return patched
-    } catch {
-      return null
-    }
+    return null
   }
 }
+
+type ResolvedUrl = { url: string | null; guessed: boolean; source: string }
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -262,6 +258,7 @@ export default function Dashboard() {
   const [searchTerm, setSearchTerm] = useState('')
   const [mobileControlsOpen, setMobileControlsOpen] = useState(false)
   const [expandedSystem, setExpandedSystem] = useState<string | null>(null)
+  const [resolvedAppUrls, setResolvedAppUrls] = useState<Record<string, ResolvedUrl>>({})
   const [config, setConfig] = useState<DashboardPreferences>({
     refreshInterval: 5000,
     notifications: true
@@ -284,6 +281,7 @@ export default function Dashboard() {
   const [prefetchedIcons, setPrefetchedIcons] = useState<Record<string, boolean>>({})
   const prefsHydratedRef = useRef(false)
   const isMobile = useIsMobile()
+  const resolvedUrlsRef = useRef<Record<string, ResolvedUrl>>({})
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -341,6 +339,10 @@ export default function Dashboard() {
     if (typeof window === 'undefined' || !prefsHydratedRef.current) return
     window.localStorage.setItem(DASHBOARD_PREFS_STORAGE_KEY, JSON.stringify(config))
   }, [config])
+
+  useEffect(() => {
+    resolvedUrlsRef.current = resolvedAppUrls
+  }, [resolvedAppUrls])
 
   const fetchSystems = useCallback(async () => {
     try {
@@ -480,6 +482,49 @@ export default function Dashboard() {
     () => systems.find((system) => system.name === expandedSystem) || null,
     [expandedSystem, systems]
   )
+
+  const resolveAppUrl = useCallback(
+    async (rawUrl: string | undefined | null, signal: AbortSignal): Promise<ResolvedUrl> => {
+      const source = rawUrl || ''
+      const trimmed = source.trim()
+      if (!trimmed) {
+        return { url: null, guessed: false, source }
+      }
+      if (/^https?:\/\//i.test(trimmed)) {
+        return { url: trimmed, guessed: false, source }
+      }
+
+      const candidates = [`http://${trimmed}`, `https://${trimmed}`]
+      for (const candidate of candidates) {
+        try {
+          await fetch(candidate, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal })
+          return { url: candidate, guessed: true, source }
+        } catch {
+          // try next candidate
+        }
+      }
+
+      return { url: `http://${trimmed}`, guessed: true, source }
+    },
+    []
+  )
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const run = async () => {
+      const updates: Record<string, ResolvedUrl> = {}
+      for (const app of appsWithMeta) {
+        const existing = resolvedUrlsRef.current[app.globalId]
+        const source = app.url || ''
+        if (existing && existing.source === source) continue
+        updates[app.globalId] = await resolveAppUrl(app.url, controller.signal)
+      }
+      if (controller.signal.aborted || Object.keys(updates).length === 0) return
+      setResolvedAppUrls((prev) => ({ ...prev, ...updates }))
+    }
+    run()
+    return () => controller.abort()
+  }, [appsWithMeta, resolveAppUrl])
 
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -1199,6 +1244,7 @@ export default function Dashboard() {
     iconPickerTarget?.icon ||
     iconPickerTarget?.fallbackIcon ||
     DOCKER_ICON_FALLBACK
+  const appLinkMap = useMemo(() => resolvedAppUrls, [resolvedAppUrls])
 
   return (
     <div className="min-h-screen bg-background">
@@ -1444,6 +1490,7 @@ export default function Dashboard() {
                       }
                       onPickIcon={setIconPickerTarget}
                       isMobile={isMobile}
+                      resolvedUrl={appLinkMap[app.globalId]?.url ?? normalizeAppUrl(app.url)}
                     />
                   ))}
                 </div>
@@ -1560,9 +1607,10 @@ type SortableAppCardProps = {
   minWidth: number
   onPickIcon?: (app: AggregatedApp | null) => void
   isMobile: boolean
+  resolvedUrl?: string | null
 }
 
-function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile }: SortableAppCardProps) {
+function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile, resolvedUrl }: SortableAppCardProps) {
   const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
     id: app.globalId
   })
@@ -1571,7 +1619,7 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile }: Sort
   const hasCpu = typeof app.cpu === 'number'
   const hasMemory = typeof app.memory === 'number'
   const fallbackIcon = app.fallbackIcon || DOCKER_ICON_FALLBACK
-  const normalizedUrl = normalizeAppUrl(app.url)
+  const normalizedUrl = resolvedUrl ?? normalizeAppUrl(app.url)
   const effectiveMinWidth = isMobile ? Math.min(minWidth, 380) : minWidth
   const style = isMobile
     ? {}
