@@ -1490,10 +1490,6 @@ export default function Dashboard() {
   const nutCharge = typeof nutStatus?.charge === 'number' ? nutStatus.charge : null
   const nutOnline =
     nutStatus?.status && nutStatus.status.toLowerCase().includes('online') && !nutError
-  const nutConfigured =
-    nutConfig.enabled &&
-    nutConfig.host.trim().length > 0 &&
-    nutConfig.username.trim().length > 0
 
   return (
     <div className="min-h-screen bg-background">
