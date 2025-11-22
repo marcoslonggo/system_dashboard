@@ -490,6 +490,10 @@ export default function Dashboard() {
       try {
         const parsed = new URL(value)
         const port = parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80
+        if (parsed.protocol === 'https:' && !HTTPS_PORTS.has(port)) {
+          parsed.protocol = 'http:'
+          return parsed.toString()
+        }
         if (parsed.protocol === 'https:' && HTTP_PORTS.has(port)) {
           parsed.protocol = 'http:'
           return parsed.toString()
