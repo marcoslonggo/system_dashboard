@@ -258,7 +258,6 @@ export default function Dashboard() {
   const [searchTerm, setSearchTerm] = useState('')
   const [mobileControlsOpen, setMobileControlsOpen] = useState(false)
   const [expandedSystem, setExpandedSystem] = useState<string | null>(null)
-  const [resolvedAppUrls, setResolvedAppUrls] = useState<Record<string, ResolvedUrl>>({})
   const [config, setConfig] = useState<DashboardPreferences>({
     refreshInterval: 5000,
     notifications: true
@@ -281,7 +280,6 @@ export default function Dashboard() {
   const [prefetchedIcons, setPrefetchedIcons] = useState<Record<string, boolean>>({})
   const prefsHydratedRef = useRef(false)
   const isMobile = useIsMobile()
-  const resolvedUrlsRef = useRef<Record<string, ResolvedUrl>>({})
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -339,10 +337,6 @@ export default function Dashboard() {
     if (typeof window === 'undefined' || !prefsHydratedRef.current) return
     window.localStorage.setItem(DASHBOARD_PREFS_STORAGE_KEY, JSON.stringify(config))
   }, [config])
-
-  useEffect(() => {
-    resolvedUrlsRef.current = resolvedAppUrls
-  }, [resolvedAppUrls])
 
   const fetchSystems = useCallback(async () => {
     try {
@@ -483,62 +477,25 @@ export default function Dashboard() {
     [expandedSystem, systems]
   )
 
-  const resolveAppUrl = useCallback(
-    async (rawUrl: string | undefined | null, signal: AbortSignal): Promise<ResolvedUrl> => {
-      const source = rawUrl || ''
-      const trimmed = source.trim()
-      if (!trimmed) {
-        return { url: null, guessed: false, source }
-      }
-      const lower = trimmed.toLowerCase()
-      const candidates: { url: string; guessed: boolean }[] = (() => {
-        if (lower.startsWith('http://')) {
-          return [
-            { url: trimmed, guessed: false },
-            { url: trimmed.replace(/^http:\/\//i, 'https://'), guessed: true }
-          ]
-        }
-        if (lower.startsWith('https://')) {
-          return [
-            { url: trimmed, guessed: false },
-            { url: trimmed.replace(/^https:\/\//i, 'http://'), guessed: true }
-          ]
-        }
-        return [
-          { url: `http://${trimmed}`, guessed: true },
-          { url: `https://${trimmed}`, guessed: true }
-        ]
-      })()
-
-      for (const candidate of candidates) {
-        try {
-          await fetch(candidate.url, { method: 'HEAD', mode: 'no-cors', cache: 'no-store', signal })
-          return { url: candidate.url, guessed: candidate.guessed, source }
-        } catch {
-          // try next candidate
-        }
-      }
-
-      return { url: candidates[0]?.url ?? null, guessed: true, source }
-    },
-    []
-  )
-
-  useEffect(() => {
-    const controller = new AbortController()
-    const run = async () => {
-      const updates: Record<string, ResolvedUrl> = {}
-      for (const app of appsWithMeta) {
-        const existing = resolvedUrlsRef.current[app.globalId]
-        const source = app.url || ''
-        if (existing && existing.source === source) continue
-        updates[app.globalId] = await resolveAppUrl(app.url, controller.signal)
-      }
-      if (controller.signal.aborted || Object.keys(updates).length === 0) return
-      setResolvedAppUrls((prev) => ({ ...prev, ...updates }))
+  const resolveAppUrl = useCallback((rawUrl: string | undefined | null): ResolvedUrl => {
+    const source = rawUrl || ''
+    const trimmed = source.trim()
+    if (!trimmed) {
+      return { url: null, guessed: false, source }
     }
-    run()
-    return () => controller.abort()
+    const lower = trimmed.toLowerCase()
+    if (lower.startsWith('http://') || lower.startsWith('https://')) {
+      return { url: trimmed, guessed: false, source }
+    }
+    return { url: `http://${trimmed}`, guessed: true, source }
+  }, [])
+
+  const appLinkMap = useMemo(() => {
+    const map: Record<string, ResolvedUrl> = {}
+    appsWithMeta.forEach((app) => {
+      map[app.globalId] = resolveAppUrl(app.url)
+    })
+    return map
   }, [appsWithMeta, resolveAppUrl])
 
   const handleDragEnd = useCallback(
@@ -1259,7 +1216,6 @@ export default function Dashboard() {
     iconPickerTarget?.icon ||
     iconPickerTarget?.fallbackIcon ||
     DOCKER_ICON_FALLBACK
-  const appLinkMap = useMemo(() => resolvedAppUrls, [resolvedAppUrls])
 
   return (
     <div className="min-h-screen bg-background">
