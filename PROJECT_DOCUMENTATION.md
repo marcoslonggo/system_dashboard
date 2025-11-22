@@ -13,6 +13,7 @@ A comprehensive web-based dashboard for monitoring and managing TrueNAS and Unra
 - [API Documentation](#api-documentation)
 - [Deployment](#deployment)
 - [Development](#development)
+- [Mobile UX Roadmap](#mobile-ux-roadmap)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [License](#license)
@@ -336,6 +337,36 @@ The project follows these conventions:
 3. **State Management**: Use React hooks for local state
 4. **Styling**: Use Tailwind CSS classes and shadcn/ui components
 5. **Error Handling**: Include proper error handling and user feedback
+
+## Mobile UX Roadmap
+
+To deliver a first-class mobile experience we are executing the following milestones. Open one PR per milestone and include screenshots or recordings from a real device/emulator.
+
+1. **Foundations**
+   - Add a `useIsMobile` hook/responsive design tokens.
+   - Implement instant search that filters app cards as the user types.
+
+2. **Header & Controls**
+   - Relayout the header so “Last updated” and the search bar are prominent.
+   - Move auto-refresh + settings into a drawer on small screens while keeping desktop controls intact.
+
+3. **Server Summary Bar**
+   - Collapse existing server cards into a slim ribbon (status dot + key metrics).
+   - Allow tapping/expanding for detailed metrics only on larger screens.
+
+4. **Card Grid & Actions**
+   - Add a compact card variant for phones (icon, name, status dot, Open button, optional quick actions).
+   - Disable drag on touch devices or switch to long-press reordering.
+
+5. **Icon Picker Polish**
+   - Show the selected icon preview + toast when saving.
+   - Prefetch selected icons to avoid flicker.
+
+6. **PWA Enhancements (optional)**
+   - Add a web app manifest + service worker for home-screen install.
+   - Ensure offline splash/icon assets render correctly.
+
+Use this section as the source of truth for mobile-related tasks.
 
 ## 🔧 Troubleshooting
 
