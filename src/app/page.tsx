@@ -169,6 +169,7 @@ const normalizeAppUrl = (url?: string | null) => {
 type ResolvedUrl = { url: string | null; guessed: boolean; source: string }
 const HTTP_PORTS = new Set([80, 81, 3000, 3001, 8080, 8081, 8880])
 const HTTPS_PORTS = new Set([443, 444, 8443, 9443])
+const NON_WEB_PORTS = new Set([22, 23, 25, 110, 143, 3306, 5432, 6379, 11211, 27017, 33060])
 
 const getStatusColor = (status: string) => {
   switch (status) {
@@ -518,6 +519,18 @@ export default function Dashboard() {
     const coerced = coerceProtocol(guessed)
     return { url: coerced || guessed, guessed: true, source }
   }, [])
+
+  const isLikelyWebUrl = (url: string | null | undefined) => {
+    if (!url) return false
+    try {
+      const parsed = new URL(url)
+      const port = parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80
+      if (Number.isNaN(port)) return false
+      return !NON_WEB_PORTS.has(port)
+    } catch {
+      return false
+    }
+  }
 
   const appLinkMap = useMemo(() => {
     const map: Record<string, ResolvedUrl> = {}
@@ -1480,19 +1493,25 @@ export default function Dashboard() {
                     gridTemplateColumns: `repeat(auto-fit, minmax(${cardMinWidth}px, 1fr))`
                   }}
                 >
-                  {visibleApps.map((app) => (
-                    <SortableAppCard
-                      key={app.globalId}
-                      app={app}
-                      minWidth={cardMinWidth}
-                      onAction={(action) =>
-                        handleAppAction({ id: app.systemId, type: app.systemType }, app.id, action)
-                      }
-                      onPickIcon={setIconPickerTarget}
-                      isMobile={isMobile}
-                      resolvedUrl={appLinkMap[app.globalId]?.url ?? normalizeAppUrl(app.url)}
-                    />
-                  ))}
+                  {visibleApps.map((app) => {
+                    const resolved = appLinkMap[app.globalId]
+                    const normalized = resolved?.url ?? normalizeAppUrl(app.url)
+                    const isWeb = isLikelyWebUrl(normalized)
+                    return (
+                      <SortableAppCard
+                        key={app.globalId}
+                        app={app}
+                        minWidth={cardMinWidth}
+                        onAction={(action) =>
+                          handleAppAction({ id: app.systemId, type: app.systemType }, app.id, action)
+                        }
+                        onPickIcon={setIconPickerTarget}
+                        isMobile={isMobile}
+                        resolvedUrl={normalized}
+                        isWeb={isWeb}
+                      />
+                    )
+                  })}
                 </div>
               </SortableContext>
             </DndContext>
@@ -1608,9 +1627,18 @@ type SortableAppCardProps = {
   onPickIcon?: (app: AggregatedApp | null) => void
   isMobile: boolean
   resolvedUrl?: string | null
+  isWeb?: boolean
 }
 
-function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile, resolvedUrl }: SortableAppCardProps) {
+function SortableAppCard({
+  app,
+  onAction,
+  minWidth,
+  onPickIcon,
+  isMobile,
+  resolvedUrl,
+  isWeb
+}: SortableAppCardProps) {
   const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
     id: app.globalId
   })
@@ -1620,6 +1648,7 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile, resolv
   const hasMemory = typeof app.memory === 'number'
   const fallbackIcon = app.fallbackIcon || DOCKER_ICON_FALLBACK
   const normalizedUrl = resolvedUrl ?? null
+  const canOpen = Boolean(normalizedUrl && isWeb)
   const effectiveMinWidth = isMobile ? Math.min(minWidth, 380) : minWidth
   const style = isMobile
     ? {}
@@ -1704,7 +1733,7 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile, resolv
             </div>
           </CardContent>
           <CardContent className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
-            {normalizedUrl && (
+            {canOpen && normalizedUrl && (
               <Button variant="default" size="sm" asChild>
                 <a href={normalizedUrl} target="_blank" rel="noopener noreferrer">
                   Open
@@ -1822,7 +1851,7 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile, resolv
               Container metrics not available from this system.
             </p>
           )}
-          {normalizedUrl && (
+          {canOpen && normalizedUrl && (
             <a
               href={normalizedUrl}
               target="_blank"
@@ -1833,7 +1862,7 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile, resolv
             </a>
           )}
           <div className="flex flex-wrap gap-2">
-            {normalizedUrl && (
+            {canOpen && normalizedUrl && (
               <Button variant="outline" size="sm" asChild>
                 <a href={normalizedUrl} target="_blank" rel="noopener noreferrer">
                   Open
