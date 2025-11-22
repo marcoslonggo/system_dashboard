@@ -1615,7 +1615,7 @@ function SortableAppCard({ app, onAction, minWidth, onPickIcon, isMobile, resolv
   const hasCpu = typeof app.cpu === 'number'
   const hasMemory = typeof app.memory === 'number'
   const fallbackIcon = app.fallbackIcon || DOCKER_ICON_FALLBACK
-  const normalizedUrl = resolvedUrl ?? resolveAppUrl(app.url).url
+  const normalizedUrl = resolvedUrl ?? null
   const effectiveMinWidth = isMobile ? Math.min(minWidth, 380) : minWidth
   const style = isMobile
     ? {}
