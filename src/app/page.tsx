@@ -1518,7 +1518,11 @@ export default function Dashboard() {
                     Settings
                   </DialogTrigger>
                 </Button>
-                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+                <DialogContent
+                  className="max-w-4xl max-h-[90vh] overflow-y-auto"
+                  onOpenAutoFocus={(event) => event.preventDefault()}
+                  onFocusOutside={(event) => event.preventDefault()}
+                >
                   <DialogHeader>
                     <DialogTitle>Dashboard Settings</DialogTitle>
                     <DialogDescription>
