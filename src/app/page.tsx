@@ -1518,7 +1518,7 @@ export default function Dashboard() {
                     Settings
                   </DialogTrigger>
                 </Button>
-                <DialogContent className="max-w-4xl">
+                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
                   <DialogHeader>
                     <DialogTitle>Dashboard Settings</DialogTitle>
                     <DialogDescription>
