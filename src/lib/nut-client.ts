@@ -95,6 +95,7 @@ export async function queryNutStatus(options: NutQueryOptions): Promise<NutStatu
       'ups.status',
       'battery.charge',
       'battery.runtime',
+      'battery.voltage',
       'ups.load',
       'input.voltage',
       'output.voltage'
@@ -110,7 +111,7 @@ export async function queryNutStatus(options: NutQueryOptions): Promise<NutStatu
         results[key] = parsed.value
       }
       if (line.startsWith('ERR')) {
-        failEarly(line)
+        continue
       }
     }
 
@@ -118,6 +119,7 @@ export async function queryNutStatus(options: NutQueryOptions): Promise<NutStatu
     if (results['ups.status']) status.status = results['ups.status']
     if (results['battery.charge']) status.charge = Number(results['battery.charge'])
     if (results['battery.runtime']) status.runtimeSeconds = Number(results['battery.runtime'])
+    if (results['battery.voltage']) status.inputVoltage = Number(results['battery.voltage'])
     if (results['ups.load']) status.load = Number(results['ups.load'])
     if (results['input.voltage']) status.inputVoltage = Number(results['input.voltage'])
     if (results['output.voltage']) status.outputVoltage = Number(results['output.voltage'])
