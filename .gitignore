@@ -46,5 +46,6 @@ dev.log
 test
 prompt
 prisma/dev.db
+prisma/dev.db-journal
 
 server.log
