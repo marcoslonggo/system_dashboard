@@ -157,6 +157,7 @@ const GROUPS_STORAGE_KEY = 'dashboard-groups'
 const USERNAME_STORAGE_KEY = 'dashboard-username'
 const DEFAULT_CARD_WIDTH = 240
 const MIN_CARD_WIDTH = 220
+const MOBILE_CARD_MIN_WIDTH = 170
 const DOCKER_ICON_FALLBACK = '/docker-icon.svg'
 
 const SYSTEM_META: Record<SystemInfo['type'], { label: string; badgeClass: string; icon: typeof HardDrive }> = {
@@ -2204,7 +2205,7 @@ export default function Dashboard() {
                             className="grid gap-[var(--card-gap)]"
                             style={{
                               gridTemplateColumns: isMobile
-                                ? `repeat(auto-fit, minmax(${MIN_CARD_WIDTH}px, 1fr))`
+                                ? `repeat(auto-fit, minmax(${MOBILE_CARD_MIN_WIDTH}px, 1fr))`
                                 : `repeat(${groupGridColumns || 1}, minmax(${cardMinWidth}px, 1fr))`
                             }}
                           >
@@ -2218,7 +2219,7 @@ export default function Dashboard() {
                                 <SortableAppCard
                                   key={app.globalId}
                                   app={app}
-                                  minWidth={isMobile ? MIN_CARD_WIDTH : cardMinWidth}
+                                  minWidth={isMobile ? MOBILE_CARD_MIN_WIDTH : cardMinWidth}
                                   onAction={(action) =>
                                     handleAppAction({ id: app.systemId, type: app.systemType }, app.id, action)
                                   }
@@ -2617,7 +2618,7 @@ function SortableAppCard({
   const fallbackIcon = app.fallbackIcon || DOCKER_ICON_FALLBACK
   const normalizedUrl = resolvedUrl ?? null
   const canOpen = Boolean(normalizedUrl && isWeb)
-  const effectiveMinWidth = isMobile ? MIN_CARD_WIDTH : minWidth
+  const effectiveMinWidth = isMobile ? MOBILE_CARD_MIN_WIDTH : minWidth
   const compactActions = effectiveMinWidth <= MIN_CARD_WIDTH
   const style = isMobile
     ? {}
@@ -2655,7 +2656,7 @@ function SortableAppCard({
       <div ref={setNodeRef} style={{ minWidth: `${effectiveMinWidth}px` }} className="w-full">
         <Card className="border border-border/60">
           <CardContent className="flex items-start gap-3 p-3">
-            {renderIcon('h-10 w-10')}
+            {renderIcon('h-9 w-9')}
             <div className="flex-1 min-w-0 space-y-2">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex min-w-0 flex-col gap-1">
