@@ -316,6 +316,7 @@ export default function Dashboard() {
   const [nutLoading, setNutLoading] = useState(false)
   const [nutError, setNutError] = useState<string | null>(null)
   const [nutMessage, setNutMessage] = useState<string | null>(null)
+  const [nutDetailsOpen, setNutDetailsOpen] = useState(false)
   const prefsHydratedRef = useRef(false)
   const isMobile = useIsMobile()
   const sensors = useSensors(
@@ -1519,10 +1520,9 @@ export default function Dashboard() {
       ? Math.max(0, Math.round(nutStatus.runtimeSeconds / 60))
       : null
   const nutCharge = typeof nutStatus?.charge === 'number' ? nutStatus.charge : null
-  const nutOnline =
-    nutStatus?.status && nutStatus.status.toLowerCase().includes('online') && !nutError
-  const nutOnBattery =
-    nutStatus?.status && nutStatus.status.toLowerCase().includes('ob') && !nutError
+  const nutStatusString = nutStatus?.status?.toLowerCase() || ''
+  const nutOnline = !!nutStatusString && (nutStatusString.includes('ol') || nutStatusString.includes('online')) && !nutError
+  const nutOnBattery = !!nutStatusString && (nutStatusString.includes('ob') || nutStatusString.includes('onbatt')) && !nutError
   const nutIndicatorClass = (() => {
     if (!nutConfigured) return 'bg-muted text-foreground'
     if (nutError) return 'bg-destructive/20 text-destructive'
@@ -1609,10 +1609,18 @@ export default function Dashboard() {
                         {nutRuntimeMinutes !== null ? ` • ${nutRuntimeMinutes}m` : ''}
                       </span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => nutConfigured && setNutDetailsOpen(true)}
+                      className={cn(
+                        'flex items-center gap-2 rounded-md px-2 py-1 text-xs transition',
+                        nutIndicatorClass,
+                        !nutConfigured && 'cursor-not-allowed opacity-60'
+                      )}
+                    >
                       <span className={cn('h-2.5 w-2.5 rounded-full', nutIndicatorDot)} />
                       <Battery className="h-5 w-5 text-primary" />
-                    </div>
+                    </button>
                   </div>
                   <div className="flex items-center justify-between rounded-lg border px-4 py-3">
                     <div className="flex flex-col gap-1">
@@ -1640,9 +1648,19 @@ export default function Dashboard() {
               <span>Last updated: {lastUpdatedLabel}</span>
               <span className="rounded-full bg-muted px-2 py-1 text-xs text-foreground">{appTotalsLabel}</span>
               <span
+                role="button"
+                tabIndex={0}
+                onClick={() => nutConfigured && setNutDetailsOpen(true)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    if (nutConfigured) setNutDetailsOpen(true)
+                  }
+                }}
                 className={cn(
-                  'hidden items-center gap-2 rounded-full border px-2 py-1 text-xs sm:flex',
-                  nutIndicatorClass
+                  'hidden cursor-pointer items-center gap-2 rounded-full border px-2 py-1 text-xs transition sm:flex',
+                  nutIndicatorClass,
+                  !nutConfigured && 'pointer-events-none opacity-70'
                 )}
               >
                 <span className={cn('h-2 w-2 rounded-full', nutIndicatorDot)} />
@@ -1907,6 +1925,68 @@ export default function Dashboard() {
             </div>
           ) : (
             <p className="text-sm text-muted-foreground">Select an application to customize its icon.</p>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={nutDetailsOpen} onOpenChange={setNutDetailsOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>UPS Details</DialogTitle>
+            <DialogDescription>Status and key metrics from the NUT server.</DialogDescription>
+          </DialogHeader>
+          {nutConfigured ? (
+            nutStatus ? (
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className={cn('h-2.5 w-2.5 rounded-full', nutIndicatorDot)} />
+                  <span className="font-medium">{nutStatus.upsName || 'UPS'}</span>
+                  <Badge variant="outline">
+                    {nutOnBattery ? 'On Battery' : nutOnline ? 'Online' : 'Unknown'}
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="rounded-md border p-2">
+                    <p className="text-xs text-muted-foreground">Status</p>
+                    <p className="font-medium">{nutStatus.status || '—'}</p>
+                  </div>
+                  <div className="rounded-md border p-2">
+                    <p className="text-xs text-muted-foreground">Charge</p>
+                    <p className="font-medium">{nutCharge !== null ? `${nutCharge}%` : '—'}</p>
+                  </div>
+                  <div className="rounded-md border p-2">
+                    <p className="text-xs text-muted-foreground">Runtime</p>
+                    <p className="font-medium">
+                      {nutRuntimeMinutes !== null ? `${nutRuntimeMinutes} min` : '—'}
+                    </p>
+                  </div>
+                  <div className="rounded-md border p-2">
+                    <p className="text-xs text-muted-foreground">Load</p>
+                    <p className="font-medium">
+                      {typeof nutStatus.load === 'number' ? `${nutStatus.load}%` : '—'}
+                    </p>
+                  </div>
+                  <div className="rounded-md border p-2">
+                    <p className="text-xs text-muted-foreground">Input Voltage</p>
+                    <p className="font-medium">
+                      {typeof nutStatus.inputVoltage === 'number' ? `${nutStatus.inputVoltage} V` : '—'}
+                    </p>
+                  </div>
+                  <div className="rounded-md border p-2">
+                    <p className="text-xs text-muted-foreground">Output Voltage</p>
+                    <p className="font-medium">
+                      {typeof nutStatus.outputVoltage === 'number' ? `${nutStatus.outputVoltage} V` : '—'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                No UPS data yet. Try running Test connection from Settings.
+              </p>
+            )
+          ) : (
+            <p className="text-sm text-muted-foreground">UPS monitoring is disabled.</p>
           )}
         </DialogContent>
       </Dialog>
