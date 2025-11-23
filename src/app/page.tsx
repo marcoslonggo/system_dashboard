@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { DndContext, PointerSensor, useSensor, useSensors, DragEndEvent } from '@dnd-kit/core'
+import { useState, useEffect, useMemo, useCallback, useRef, ReactNode } from 'react'
+import { DndContext, PointerSensor, useSensor, useSensors, DragEndEvent, useDroppable } from '@dnd-kit/core'
 import { SortableContext, arrayMove, rectSortingStrategy, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
@@ -17,7 +17,6 @@ import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { slugify as sharedSlugify } from '@/lib/slugify'
-import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { 
   Server, 
@@ -35,7 +34,6 @@ import {
   Clock,
   Thermometer,
   GripVertical,
-  ChevronDown,
   Image as ImageIcon,
   X,
   Search,
@@ -85,6 +83,20 @@ interface AggregatedApp extends App {
   hostCpu: number
   hostMemory: number
   fallbackIcon: string
+}
+
+interface AppGroup {
+  id: string
+  name: string
+}
+
+interface UserPreferences {
+  groups: AppGroup[]
+  appGroups: Record<string, string | null>
+  appOrder: string[]
+  hiddenApps: Record<string, boolean>
+  openDisabled: Record<string, boolean>
+  cardMinWidth: number
 }
 
 interface DashboardPreferences {
@@ -140,7 +152,11 @@ const APP_ORDER_STORAGE_KEY = 'dashboard-app-order'
 const CARD_WIDTH_STORAGE_KEY = 'dashboard-card-width'
 const DASHBOARD_PREFS_STORAGE_KEY = 'dashboard-preferences'
 const APP_VISIBILITY_STORAGE_KEY = 'dashboard-app-visibility'
-const DEFAULT_CARD_WIDTH = 320
+const APP_GROUPS_STORAGE_KEY = 'dashboard-app-groups'
+const GROUPS_STORAGE_KEY = 'dashboard-groups'
+const USERNAME_STORAGE_KEY = 'dashboard-username'
+const DEFAULT_CARD_WIDTH = 240
+const MIN_CARD_WIDTH = 220
 const DOCKER_ICON_FALLBACK = '/docker-icon.svg'
 
 const SYSTEM_META: Record<SystemInfo['type'], { label: string; badgeClass: string; icon: typeof HardDrive }> = {
@@ -325,6 +341,14 @@ export default function Dashboard() {
   const [nutError, setNutError] = useState<string | null>(null)
   const [nutMessage, setNutMessage] = useState<string | null>(null)
   const [nutDetailsOpen, setNutDetailsOpen] = useState(false)
+  const [groups, setGroups] = useState<AppGroup[]>([])
+  const [appGroups, setAppGroups] = useState<Record<string, string | null>>({})
+  const [newGroupName, setNewGroupName] = useState('')
+  const [username, setUsername] = useState('')
+  const [usernameInput, setUsernameInput] = useState('')
+  const [copyFromUser, setCopyFromUser] = useState('')
+  const groupSortableIds = useMemo(() => groups.map((g) => `group-item:${g.id}`), [groups])
+  const saveDebounceRef = useRef<NodeJS.Timeout | null>(null)
   const persistVisibility = useCallback(
     (hidden: Record<string, boolean>, openMap: Record<string, boolean>) => {
       if (typeof window === 'undefined') return
@@ -338,7 +362,7 @@ export default function Dashboard() {
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 8
+        distance: 4
       }
     })
   )
@@ -363,8 +387,10 @@ export default function Dashboard() {
     const stored = window.localStorage.getItem(CARD_WIDTH_STORAGE_KEY)
     if (stored) {
       const parsed = Number(stored)
-      if (!Number.isNaN(parsed) && parsed >= 220 && parsed <= 480) {
+      if (!Number.isNaN(parsed) && (parsed === MIN_CARD_WIDTH || parsed === DEFAULT_CARD_WIDTH)) {
         setCardMinWidth(parsed)
+      } else {
+        setCardMinWidth(DEFAULT_CARD_WIDTH)
       }
     }
   }, [])
@@ -384,6 +410,33 @@ export default function Dashboard() {
       } catch {
         // ignore
       }
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const stored = window.localStorage.getItem(GROUPS_STORAGE_KEY)
+    const storedMap = window.localStorage.getItem(APP_GROUPS_STORAGE_KEY)
+    try {
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        if (Array.isArray(parsed)) setGroups(parsed)
+      }
+      if (storedMap) {
+        const parsedMap = JSON.parse(storedMap)
+        if (parsedMap && typeof parsedMap === 'object') setAppGroups(parsedMap)
+      }
+    } catch {
+      // ignore malformed
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const storedUser = window.localStorage.getItem(USERNAME_STORAGE_KEY)
+    if (storedUser) {
+      setUsername(storedUser)
+      setUsernameInput(storedUser)
     }
   }, [])
 
@@ -414,6 +467,53 @@ export default function Dashboard() {
     if (typeof window === 'undefined' || !prefsHydratedRef.current) return
     window.localStorage.setItem(DASHBOARD_PREFS_STORAGE_KEY, JSON.stringify(config))
   }, [config])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(GROUPS_STORAGE_KEY, JSON.stringify(groups))
+    window.localStorage.setItem(APP_GROUPS_STORAGE_KEY, JSON.stringify(appGroups))
+  }, [groups, appGroups])
+
+  useEffect(() => {
+    // Clean up assignments pointing to deleted groups
+    setAppGroups((prev) => {
+      const validIds = new Set(groups.map((g) => g.id))
+      let changed = false
+      const next: Record<string, string | null> = {}
+      Object.entries(prev).forEach(([id, groupId]) => {
+        if (groupId && !validIds.has(groupId)) {
+          changed = true
+          next[id] = null
+        } else {
+          next[id] = groupId ?? null
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [groups])
+
+  useEffect(() => {
+    if (!username || typeof window === 'undefined') return
+    window.localStorage.setItem(USERNAME_STORAGE_KEY, username)
+  }, [username])
+
+  useEffect(() => {
+    // Clean up assignments pointing to deleted groups
+    setAppGroups((prev) => {
+      const validIds = new Set(groups.map((g) => g.id))
+      let changed = false
+      const next: Record<string, string | null> = {}
+      Object.entries(prev).forEach(([id, groupId]) => {
+        if (groupId && !validIds.has(groupId)) {
+          changed = true
+          next[id] = null
+        } else {
+          next[id] = groupId ?? null
+        }
+      })
+      return changed ? next : prev
+    })
+  }, [groups])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -624,6 +724,33 @@ export default function Dashboard() {
     })
   }, [orderedApps, searchTerm, hiddenApps, showHidden])
 
+  const groupedVisibleApps = useMemo(() => {
+    const buckets: Array<{
+      key: string
+      name: string
+      id: string
+      apps: AggregatedApp[]
+    }> = []
+    const order = [...groups.map((g) => g.id), 'none']
+    const makeGroup = (id: string, name: string) => {
+      const bucket = { key: id, id, name, apps: [] }
+      buckets.push(bucket)
+      return bucket
+    }
+    const map = new Map<string, (typeof buckets)[number]>()
+    order.forEach((id) => {
+      const name = id === 'none' ? 'Ungrouped' : groups.find((g) => g.id === id)?.name || 'Group'
+      const bucket = makeGroup(id, name)
+      map.set(id, bucket)
+    })
+    visibleApps.forEach((app) => {
+      const groupId = appGroups[app.globalId] ?? 'none'
+      const bucket = map.get(groupId) || map.get('none')
+      if (bucket) bucket.apps.push(app)
+    })
+    return buckets
+  }, [visibleApps, groups, appGroups])
+
   useEffect(() => {
     setHiddenApps((prev) => {
       const next: Record<string, boolean> = {}
@@ -704,10 +831,55 @@ export default function Dashboard() {
   const handleDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event
-      if (!over || active.id === over.id) return
+      if (!over) return
+      const activeId = active.id as string
+      const overId = over.id as string
+      if (overId === activeId) return
+
+      // Dropping on a group container
+      if (overId.startsWith('group:')) {
+        const targetGroupId = overId.replace('group:', '')
+        setAppGroups((prev) => ({ ...prev, [activeId]: targetGroupId === 'none' ? null : targetGroupId }))
+        setAppOrder((prev) => {
+          const next = prev.filter((id) => id !== activeId)
+          next.push(activeId)
+          persistOrder(next)
+          return next
+        })
+        return
+      }
+
+      // Dragging groups to reorder
+      if (activeId.startsWith('group-item:')) {
+        const activeGroupId = activeId.replace('group-item:', '')
+        let targetGroupId: string | null = null
+        if (overId.startsWith('group-item:')) {
+          targetGroupId = overId.replace('group-item:', '')
+        } else if (overId.startsWith('group:')) {
+          targetGroupId = overId.replace('group:', '')
+        }
+        if (!targetGroupId || targetGroupId === activeGroupId) return
+        setGroups((prev) => {
+          const ids = prev.map((g) => g.id)
+          const oldIndex = ids.indexOf(activeGroupId)
+          const newIndex = ids.indexOf(targetGroupId)
+          if (oldIndex === -1 || newIndex === -1) return prev
+          const next = arrayMove(prev, oldIndex, newIndex)
+          return next
+        })
+        return
+      }
+
+      // Dropping on another card
+      setAppGroups((prev) => {
+        const targetGroupId = prev[overId] ?? null
+        const next = { ...prev, [activeId]: targetGroupId }
+        return next
+      })
+
       setAppOrder((prev) => {
-        const oldIndex = prev.indexOf(active.id as string)
-        const newIndex = prev.indexOf(over.id as string)
+        const oldIndex = prev.indexOf(activeId)
+        const newIndex = prev.indexOf(overId)
         if (oldIndex === -1 || newIndex === -1) return prev
         const next = arrayMove(prev, oldIndex, newIndex)
         persistOrder(next)
@@ -717,13 +889,94 @@ export default function Dashboard() {
     [persistOrder]
   )
 
-  const handleCardWidthChange = useCallback((value: number[]) => {
-    const width = value[0]
-    setCardMinWidth(width)
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(CARD_WIDTH_STORAGE_KEY, String(width))
-    }
+  const addGroup = useCallback(() => {
+    const name = newGroupName.trim()
+    if (!name) return
+    const id =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `group-${Date.now()}`
+    setGroups((prev) => [...prev, { id, name }])
+    setNewGroupName('')
+  }, [newGroupName])
+
+  const deleteGroup = useCallback((id: string) => {
+    setGroups((prev) => prev.filter((g) => g.id !== id))
+    setAppGroups((prev) => {
+      const next = { ...prev }
+      Object.keys(next).forEach((key) => {
+        if (next[key] === id) next[key] = null
+      })
+      return next
+    })
   }, [])
+
+  const hydratePreferences = useCallback(
+    (data: Partial<UserPreferences> | null | undefined) => {
+      if (!data) return
+      if (Array.isArray(data.groups)) setGroups(data.groups)
+      if (data.appGroups && typeof data.appGroups === 'object') setAppGroups(data.appGroups)
+      if (Array.isArray(data.appOrder)) setAppOrder(data.appOrder)
+      if (data.hiddenApps && typeof data.hiddenApps === 'object') setHiddenApps(data.hiddenApps)
+      if (data.openDisabled && typeof data.openDisabled === 'object') setOpenDisabled(data.openDisabled)
+      if (typeof data.cardMinWidth === 'number' && data.cardMinWidth >= MIN_CARD_WIDTH) {
+        setCardMinWidth(data.cardMinWidth)
+      }
+    },
+    []
+  )
+
+  const fetchPreferences = useCallback(
+    async (user: string) => {
+      if (!user) return
+      try {
+        const res = await fetch(`/api/preferences?username=${encodeURIComponent(user)}`)
+        if (!res.ok) return
+        const json = await res.json()
+        hydratePreferences(json?.data)
+      } catch (err) {
+        console.warn('Failed to load preferences', err)
+      }
+    },
+    [hydratePreferences]
+  )
+
+  useEffect(() => {
+    if (!username) return
+    fetchPreferences(username)
+  }, [username, fetchPreferences])
+
+  const persistPreferencesRemote = useCallback(async () => {
+    if (!username) return
+    const payload: UserPreferences = {
+      groups,
+      appGroups,
+      appOrder,
+      hiddenApps,
+      openDisabled,
+      cardMinWidth
+    }
+    try {
+      await fetch('/api/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, data: payload })
+      })
+    } catch (err) {
+      console.warn('Failed to save preferences', err)
+    }
+  }, [username, groups, appGroups, appOrder, hiddenApps, openDisabled, cardMinWidth])
+
+  useEffect(() => {
+    if (!username) return
+    if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
+    saveDebounceRef.current = setTimeout(() => {
+      persistPreferencesRemote()
+    }, 400)
+    return () => {
+      if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
+    }
+  }, [username, groups, appGroups, appOrder, hiddenApps, openDisabled, cardMinWidth, persistPreferencesRemote])
 
   const resetConfigForm = () => {
     setConfigForm(emptyConfigForm)
@@ -1180,6 +1433,106 @@ export default function Dashboard() {
         </Card>
       </div>
 
+      <div className="space-y-3">
+        <h3 className="text-lg font-semibold">App Groups</h3>
+        <p className="text-sm text-muted-foreground">
+          Create lightweight groups to keep cards organized. Drag cards between groups on desktop.
+        </p>
+        <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
+          <div className="space-y-2">
+            <Label>Username (no password)</Label>
+            <Input
+              value={usernameInput}
+              onChange={(e) => setUsernameInput(e.target.value)}
+              placeholder="your-name"
+            />
+          </div>
+          <Button
+            className="sm:mt-7"
+            onClick={() => {
+              const trimmed = usernameInput.trim()
+              if (!trimmed) return
+              setUsername(trimmed)
+              toast.success(`Profile set to ${trimmed}`)
+            }}
+            disabled={!usernameInput.trim()}
+          >
+            Use this profile
+          </Button>
+        </div>
+        <div className="grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
+          <div className="space-y-2">
+            <Label>Copy config from user</Label>
+            <Input
+              value={copyFromUser}
+              onChange={(e) => setCopyFromUser(e.target.value)}
+              placeholder="other-user"
+            />
+          </div>
+          <Button
+            className="sm:mt-7"
+            variant="outline"
+            disabled={!copyFromUser.trim() || !username.trim()}
+            onClick={async () => {
+              const from = copyFromUser.trim()
+              const to = username.trim()
+              if (!from || !to) return
+              try {
+                const res = await fetch('/api/preferences/copy', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ from, to })
+                })
+                if (!res.ok) {
+                  const msg = (await res.json().catch(() => ({})))?.error || 'Failed to copy'
+                  toast.error(msg)
+                  return
+                }
+                await fetchPreferences(to)
+                toast.success(`Copied config from ${from} to ${to}`)
+              } catch (err) {
+                toast.error('Could not copy config')
+              }
+            }}
+          >
+            Copy into my profile
+          </Button>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <Input
+            value={newGroupName}
+            onChange={(e) => setNewGroupName(e.target.value)}
+            placeholder="Add a group name"
+          />
+          <Button onClick={addGroup} disabled={!newGroupName.trim()}>
+            Add group
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          {groups.length === 0 ? (
+            <span>No groups yet. Ungrouped is shown by default.</span>
+          ) : (
+            groups.map((group) => (
+              <span
+                key={group.id}
+                className="inline-flex items-center gap-2 rounded-full border px-3 py-1 text-foreground"
+              >
+                {group.name}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6 text-muted-foreground"
+                  onClick={() => deleteGroup(group.id)}
+                  title="Remove group"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </span>
+            ))
+          )}
+        </div>
+      </div>
+
       <div className="space-y-4">
         <div>
           <h3 className="text-lg font-semibold">Connected Systems</h3>
@@ -1537,7 +1890,12 @@ export default function Dashboard() {
     </div>
   )
 
-  const allowDrag = !isMobile
+  const allowDrag = true
+  const groupGridColumns = useMemo(() => {
+    if (isMobile) return null
+    const cols = Math.min(4, Math.max(1, Math.floor(1200 / cardMinWidth)))
+    return cols
+  }, [isMobile, cardMinWidth])
   const lastUpdatedLabel = lastUpdated ? lastUpdated.toLocaleTimeString() : '—'
   const appTotalsLabel =
     searchTerm.trim().length > 0
@@ -1715,6 +2073,21 @@ export default function Dashboard() {
                 {nutRuntimeMinutes !== null && <span className="opacity-80">{nutRuntimeMinutes}m</span>}
               </span>
             </div>
+            {isMobile && systems.length > 0 && (
+              <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs text-muted-foreground">
+                {systems.map((system) => (
+                  <button
+                    key={system.name}
+                    type="button"
+                    onClick={() => setServerDetails(system)}
+                    className="flex items-center gap-2 rounded-full border px-3 py-1 bg-card"
+                  >
+                    <span className={`h-2.5 w-2.5 rounded-full ${getStatusColor(system.status)}`} />
+                    <span className="font-medium text-foreground">{system.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="w-full md:max-w-xl">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -1731,74 +2104,52 @@ export default function Dashboard() {
       </div>
 
       <div className="mx-auto max-w-screen-xl space-y-[var(--section-gap)] px-[var(--page-gutter)] py-6">
-        {/* System Overview */}
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Servers</h2>
-            {systems.length > 0 && (
-              <span className="text-xs text-muted-foreground">Click a chip to view details</span>
+        {!isMobile && (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Servers</h2>
+              {systems.length > 0 && (
+                <span className="text-xs text-muted-foreground">Click a chip to view details</span>
+              )}
+            </div>
+            {systems.length === 0 ? (
+              <Card className="w-full border-border/60 bg-muted/50">
+                <CardContent className="flex flex-col gap-2 px-4 py-5 text-sm text-muted-foreground">
+                  <p className="font-medium text-foreground">No systems connected yet.</p>
+                  <p>Add a TrueNAS or Unraid host from the Settings dialog to start monitoring.</p>
+                </CardContent>
+              </Card>
+            ) : (
+              <div className="rounded-[var(--panel-radius)] border border-border/60 bg-card shadow-sm">
+                <div className="flex flex-wrap gap-2 px-3 py-3 text-xs sm:text-sm">
+                  {systems.map((system) => (
+                    <button
+                      key={system.name}
+                      type="button"
+                      onClick={() => setServerDetails(system)}
+                      className={cn(
+                        'flex items-center gap-3 rounded-full border px-3 py-2 transition hover:border-primary hover:text-foreground',
+                        'border-border/70 bg-muted/50'
+                      )}
+                    >
+                      <span className={`h-2 w-2 rounded-full ${getStatusColor(system.status)}`} />
+                      <span className="font-semibold text-foreground">{system.name}</span>
+                      <span className="text-muted-foreground">CPU {system.cpu}%</span>
+                      <span className="text-muted-foreground">RAM {system.memory}%</span>
+                      <span className="text-muted-foreground">Storage {system.storage}%</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
           </div>
-          {systems.length === 0 ? (
-            <Card className="w-full border-border/60 bg-muted/50">
-              <CardContent className="flex flex-col gap-2 px-4 py-5 text-sm text-muted-foreground">
-                <p className="font-medium text-foreground">No systems connected yet.</p>
-                <p>Add a TrueNAS or Unraid host from the Settings dialog to start monitoring.</p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="rounded-[var(--panel-radius)] border border-border/60 bg-card shadow-sm">
-              <div className="flex flex-wrap gap-2 px-3 py-3 text-xs sm:text-sm">
-                {systems.map((system) => (
-                  <button
-                    key={system.name}
-                    type="button"
-                    onClick={() => setServerDetails(system)}
-                    className={cn(
-                      'flex items-center gap-3 rounded-full border px-3 py-2 transition hover:border-primary hover:text-foreground',
-                      'border-border/70 bg-muted/50'
-                    )}
-                  >
-                    <span className={`h-2 w-2 rounded-full ${getStatusColor(system.status)}`} />
-                    <span className="font-semibold text-foreground">{system.name}</span>
-                    <span className="text-muted-foreground">CPU {system.cpu}%</span>
-                    <span className="text-muted-foreground">RAM {system.memory}%</span>
-                    <span className="text-muted-foreground">Storage {system.storage}%</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+        )}
 
         {/* Apps Management */}
         <div className="space-y-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="space-y-1">
+            <div>
               <h2 className="text-lg font-semibold">Applications</h2>
-              <p className="text-sm text-muted-foreground">
-                Reorder cards and manage containers from a unified view.
-              </p>
-            </div>
-          <div className="flex flex-col gap-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-end">
-            <div className="flex items-center gap-3">
-              <span>Card size</span>
-              <Slider
-                className="w-40"
-                  min={220}
-                  max={420}
-                  step={20}
-                  value={[cardMinWidth]}
-                  onValueChange={handleCardWidthChange}
-                />
-                <span className="text-muted-foreground">{cardMinWidth}px</span>
-              </div>
-              {isMobile && (
-                <div className="flex items-center gap-2 text-xs">
-                  <GripVertical className="h-4 w-4" />
-                  <span>Drag reordering is disabled on touch</span>
-                </div>
-              )}
             </div>
           </div>
           {orderedApps.length === 0 ? (
@@ -1816,63 +2167,75 @@ export default function Dashboard() {
               </CardContent>
             </Card>
           ) : (
-            <DndContext
-              sensors={allowDrag ? sensors : []}
-              onDragEnd={allowDrag ? handleDragEnd : undefined}
-            >
-              <SortableContext
-                items={visibleApps.map((app) => app.globalId)}
-                strategy={rectSortingStrategy}
-              >
-                <div
-                  className="grid gap-[var(--card-gap)]"
-                  style={{
-                    gridTemplateColumns: `repeat(auto-fit, minmax(${cardMinWidth}px, 1fr))`
-                  }}
-                >
-                  {visibleApps.map((app) => {
-                    const resolved = appLinkMap[app.globalId]
-                    const normalized = resolved?.url ?? normalizeAppUrl(app.url)
-                    const isWeb = isLikelyWebUrl(normalized)
-                    const isHidden = hiddenApps[app.globalId]
-                    const openEnabled = !openDisabled[app.globalId]
-                    return (
-                      <SortableAppCard
-                        key={app.globalId}
-                        app={app}
-                        minWidth={cardMinWidth}
-                        onAction={(action) =>
-                          handleAppAction({ id: app.systemId, type: app.systemType }, app.id, action)
-                        }
-                        onPickIcon={setIconPickerTarget}
-                        isMobile={isMobile}
-                        resolvedUrl={normalized}
-                        isWeb={isWeb}
-                        isHidden={!!isHidden}
-                        showOpen={!!(normalized && isWeb && openEnabled)}
-                        onToggleOpen={() =>
-                          setOpenDisabled((prev) => {
-                            const next = { ...prev, [app.globalId]: !prev[app.globalId] }
-                            return next
-                          })
-                        }
-                        onHide={() =>
-                          setHiddenApps((prev) => ({
-                            ...prev,
-                            [app.globalId]: true
-                          }))
-                        }
-                        onUnhide={() =>
-                          setHiddenApps((prev) => {
-                            const next = { ...prev }
-                            delete next[app.globalId]
-                            return next
-                          })
-                        }
-                      />
-                    )
-                  })}
-                </div>
+            <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
+              <SortableContext items={groupSortableIds} strategy={rectSortingStrategy}>
+                <SortableContext items={visibleApps.map((app) => app.globalId)} strategy={rectSortingStrategy}>
+                  <div className="space-y-4">
+                    {groupedVisibleApps.map((group) => {
+                      const Container = group.id === 'none' ? GroupContainer : SortableGroupContainer
+                      return (
+                        <Container
+                          key={group.key}
+                          groupId={group.id}
+                          name={group.name}
+                          count={group.apps.length}
+                        >
+                          <div
+                            className="grid gap-[var(--card-gap)]"
+                            style={{
+                              gridTemplateColumns: isMobile
+                                ? `repeat(auto-fit, minmax(${MIN_CARD_WIDTH}px, 1fr))`
+                                : `repeat(${groupGridColumns || 1}, minmax(${cardMinWidth}px, 1fr))`
+                            }}
+                          >
+                            {group.apps.map((app) => {
+                              const resolved = appLinkMap[app.globalId]
+                              const normalized = resolved?.url ?? normalizeAppUrl(app.url)
+                              const isWeb = isLikelyWebUrl(normalized)
+                              const isHidden = hiddenApps[app.globalId]
+                              const openEnabled = !openDisabled[app.globalId]
+                              return (
+                                <SortableAppCard
+                                  key={app.globalId}
+                                  app={app}
+                                  minWidth={isMobile ? MIN_CARD_WIDTH : cardMinWidth}
+                                  onAction={(action) =>
+                                    handleAppAction({ id: app.systemId, type: app.systemType }, app.id, action)
+                                  }
+                                  onPickIcon={setIconPickerTarget}
+                                  isMobile={isMobile}
+                                  resolvedUrl={normalized}
+                                  isWeb={isWeb}
+                                  isHidden={!!isHidden}
+                                  showOpen={!!(normalized && isWeb && openEnabled)}
+                                  onToggleOpen={() =>
+                                    setOpenDisabled((prev) => {
+                                      const next = { ...prev, [app.globalId]: !prev[app.globalId] }
+                                      return next
+                                    })
+                                  }
+                                  onHide={() =>
+                                    setHiddenApps((prev) => ({
+                                      ...prev,
+                                      [app.globalId]: true
+                                    }))
+                                  }
+                                  onUnhide={() =>
+                                    setHiddenApps((prev) => {
+                                      const next = { ...prev }
+                                      delete next[app.globalId]
+                                      return next
+                                    })
+                                  }
+                                />
+                              )
+                            })}
+                          </div>
+                        </Container>
+                      )
+                    })}
+                  </div>
+                </SortableContext>
               </SortableContext>
             </DndContext>
           )}
@@ -2096,6 +2459,107 @@ function IconGridItem({
   )
 }
 
+function GroupContainer({
+  groupId,
+  name,
+  count,
+  children
+}: {
+  groupId: string
+  name: string
+  count: number
+  children: ReactNode
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `group:${groupId}` })
+  return (
+    <div
+      ref={setNodeRef}
+      className={cn(
+        'space-y-2 rounded-md border border-border/60 bg-card/70 p-2',
+        isOver && 'border-primary/60 shadow-sm'
+      )}
+    >
+      <div className="flex items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-foreground">{name}</span>
+        </div>
+        <span>{count} apps</span>
+      </div>
+      {count === 0 ? (
+        <div className="flex min-h-[48px] items-center justify-center rounded border border-dashed border-border/80 text-[11px] text-muted-foreground">
+          Drop apps here
+        </div>
+      ) : (
+        children
+      )}
+    </div>
+  )
+}
+
+function SortableGroupContainer({
+  groupId,
+  name,
+  count,
+  children
+}: {
+  groupId: string
+  name: string
+  count: number
+  children: ReactNode
+}) {
+  const { setNodeRef: setDropRef, isOver } = useDroppable({ id: `group:${groupId}` })
+  const { attributes, listeners, setNodeRef: setSortableRef, transform, transition, isDragging } = useSortable({
+    id: `group-item:${groupId}`
+  })
+  const setRefs = useCallback(
+    (node: HTMLElement | null) => {
+      setDropRef(node)
+      setSortableRef(node)
+    },
+    [setDropRef, setSortableRef]
+  )
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  }
+
+  return (
+    <div
+      ref={setRefs}
+      style={style}
+      className={cn(
+        'space-y-2 rounded-md border border-border/60 bg-card/70 p-2',
+        isOver && 'border-primary/60 shadow-sm',
+        isDragging && 'ring-2 ring-primary/30'
+      )}
+    >
+      <div className="flex items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 cursor-grab text-muted-foreground"
+            title="Drag to reorder group"
+            {...attributes}
+            {...listeners}
+          >
+            <GripVertical className="h-4 w-4" />
+          </Button>
+          <span className="font-semibold text-foreground">{name}</span>
+        </div>
+        <span>{count} apps</span>
+      </div>
+      {count === 0 ? (
+        <div className="flex min-h-[48px] items-center justify-center rounded border border-dashed border-border/80 text-[11px] text-muted-foreground">
+          Drop apps here
+        </div>
+      ) : (
+        children
+      )}
+    </div>
+  )
+}
+
 type SortableAppCardProps = {
   app: AggregatedApp
   onAction: (action: 'start' | 'stop' | 'restart') => void
@@ -2133,7 +2597,8 @@ function SortableAppCard({
   const fallbackIcon = app.fallbackIcon || DOCKER_ICON_FALLBACK
   const normalizedUrl = resolvedUrl ?? null
   const canOpen = Boolean(normalizedUrl && isWeb)
-  const effectiveMinWidth = isMobile ? Math.min(minWidth, 380) : minWidth
+  const effectiveMinWidth = isMobile ? MIN_CARD_WIDTH : minWidth
+  const compactActions = effectiveMinWidth <= MIN_CARD_WIDTH
   const style = isMobile
     ? {}
     : {
@@ -2142,6 +2607,8 @@ function SortableAppCard({
     }
   const dragAttributes = isMobile ? undefined : attributes
   const dragListeners = isMobile ? undefined : listeners
+
+  const dragHandleProps = { ...dragAttributes, ...dragListeners }
 
   const renderIcon = (sizeClass = 'h-10 w-10') => (
     <div className={`${sizeClass} overflow-hidden rounded-md bg-muted p-1`}>
@@ -2168,73 +2635,75 @@ function SortableAppCard({
       <div ref={setNodeRef} style={{ minWidth: `${effectiveMinWidth}px` }} className="w-full">
         <Card className="border border-border/60">
           <CardContent className="flex items-start gap-3 p-3">
-            {renderIcon('h-12 w-12')}
-            <div className="flex-1 space-y-2">
+            {renderIcon('h-10 w-10')}
+            <div className="flex-1 min-w-0 space-y-2">
               <div className="flex items-start justify-between gap-2">
-                <div className="flex flex-col gap-1">
+                <div className="flex min-w-0 flex-col gap-1">
                   <div className="flex items-center gap-2">
-                    <span className={`h-2 w-2 rounded-full ${getStatusColor(app.status)}`} />
-                    <p className="text-sm font-semibold">{app.name}</p>
+                    <span className={`h-2.5 w-2.5 rounded-full ${getStatusColor(app.status)}`} />
+                    <p className="truncate text-sm font-semibold">{app.name}</p>
                   </div>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                     <Badge className={cn('flex items-center gap-1', meta.badgeClass)}>
                       <HostIcon className="h-3 w-3" />
                       {meta.label}
                     </Badge>
                     <span className="capitalize">{app.status}</span>
                   </div>
+                  {normalizedUrl && (
+                    <a
+                      href={normalizedUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block truncate text-[11px] text-muted-foreground underline underline-offset-2"
+                    >
+                      {normalizedUrl.replace(/\/$/, '')}
+                    </a>
+                  )}
                 </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
-                      <MoreVertical className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem disabled={!canOpen} onClick={onToggleOpen}>
-                      {showOpen ? 'Disable Open button' : 'Enable Open button'}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => onPickIcon?.(app)}>
-                      Change icon
-                    </DropdownMenuItem>
-                    {normalizedUrl && (
-                      <DropdownMenuItem
-                        onClick={() => normalizedUrl && navigator.clipboard?.writeText(normalizedUrl)}
-                      >
-                        <Copy className="mr-2 h-4 w-4" />
-                        Copy URL
+                <div className="flex shrink-0 items-center gap-1 self-start">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem disabled={!canOpen} onClick={onToggleOpen}>
+                        {showOpen ? 'Disable Open button' : 'Enable Open button'}
                       </DropdownMenuItem>
-                    )}
-                    <DropdownMenuSeparator />
-                    {isHidden ? (
-                      <DropdownMenuItem onClick={onUnhide}>
-                        <Eye className="mr-2 h-4 w-4" />
-                        Unhide card
+                      <DropdownMenuItem onClick={() => onPickIcon?.(app)}>
+                        Change icon
                       </DropdownMenuItem>
-                    ) : (
-                      <DropdownMenuItem onClick={onHide}>
-                        <EyeOff className="mr-2 h-4 w-4" />
-                        Hide card
-                      </DropdownMenuItem>
-                    )}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                <span className="flex items-center gap-1">
-                  <Cpu className="h-3 w-3" />
-                  Host {app.hostCpu}% CPU
-                </span>
-                <span className="flex items-center gap-1">
-                  <MemoryStick className="h-3 w-3" />
-                  Host {app.hostMemory}% RAM
-                </span>
+                      {normalizedUrl && (
+                        <DropdownMenuItem
+                          onClick={() => normalizedUrl && navigator.clipboard?.writeText(normalizedUrl)}
+                        >
+                          <Copy className="mr-2 h-4 w-4" />
+                          Copy URL
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuSeparator />
+                      {isHidden ? (
+                        <DropdownMenuItem onClick={onUnhide}>
+                          <Eye className="mr-2 h-4 w-4" />
+                          Unhide card
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem onClick={onHide}>
+                          <EyeOff className="mr-2 h-4 w-4" />
+                          Hide card
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
               </div>
             </div>
           </CardContent>
-          <CardContent className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
+          <CardContent className="flex flex-wrap items-center gap-1.5 border-t px-3 py-2">
             {showOpen && canOpen && normalizedUrl && (
-              <Button variant="default" size="sm" asChild>
+              <Button variant="default" size="sm" className="h-8 px-2 text-xs" asChild>
                 <a href={normalizedUrl} target="_blank" rel="noopener noreferrer">
                   Open
                 </a>
@@ -2246,7 +2715,7 @@ function SortableAppCard({
                   size="sm"
                   variant="outline"
                   onClick={() => onAction('restart')}
-                  className="flex items-center gap-1"
+                  className="flex items-center gap-1 h-8 px-2 text-xs"
                 >
                   <RotateCcw className="h-3 w-3" />
                   Restart
@@ -2255,7 +2724,7 @@ function SortableAppCard({
                   size="sm"
                   variant="destructive"
                   onClick={() => onAction('stop')}
-                  className="flex items-center gap-1"
+                  className="flex items-center gap-1 h-8 px-2 text-xs"
                 >
                   <PowerOff className="h-3 w-3" />
                   Stop
@@ -2266,7 +2735,7 @@ function SortableAppCard({
                 size="sm"
                 variant="secondary"
                 onClick={() => onAction('start')}
-                className="flex items-center gap-1"
+                className="flex items-center gap-1 h-8 px-2 text-xs"
               >
                 <Power className="h-3 w-3" />
                 Start
@@ -2283,61 +2752,99 @@ function SortableAppCard({
       ref={setNodeRef}
       style={{ ...style, minWidth: `${effectiveMinWidth}px` }}
       className={cn('w-full', isDragging && 'cursor-grabbing opacity-90 drop-shadow-lg')}
-      {...dragAttributes}
-      {...dragListeners}
     >
-      <Card className={cn('h-full border border-border/60', isDragging && 'ring-2 ring-primary/40')}>
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <Badge className={cn('flex items-center gap-1', meta.badgeClass)}>
-              <HostIcon className="h-3 w-3" />
-              {meta.label}
-            </Badge>
-            <div className="flex items-center gap-1">
-              {app.slug && onPickIcon && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6 text-muted-foreground"
-                  onClick={() => onPickIcon(app)}
-                  title="Customize icon"
-                >
-                  <ImageIcon className="h-3.5 w-3.5" />
-                </Button>
-              )}
-              <GripVertical className="h-4 w-4 text-muted-foreground" />
-            </div>
-          </div>
-          <CardTitle className="text-base">{app.name}</CardTitle>
-          <CardDescription className="flex items-center gap-2 text-sm">
-            <span className={`h-2 w-2 rounded-full ${getStatusColor(app.status)}`} />
-            <span className="capitalize">{app.status}</span>
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex items-center gap-3">
-            {renderIcon()}
-            <div className="text-xs text-muted-foreground">
-              <p className="font-medium text-foreground">{app.systemName}</p>
-              <div className="flex items-center gap-1">
-                <span className={`h-1.5 w-1.5 rounded-full ${getStatusColor(app.systemStatus)}`} />
-                <span className="capitalize">{app.systemStatus}</span>
+      <Card
+        className={cn(
+          'h-full border border-border/60 shadow-sm transition hover:border-primary/40',
+          isDragging && 'ring-2 ring-primary/40'
+        )}
+      >
+        <CardContent className="space-y-2.5 p-3">
+          <div className="flex items-start gap-3">
+            {renderIcon('h-12 w-12')}
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className={`h-2.5 w-2.5 rounded-full ${getStatusColor(app.status)}`} />
+                    <p className="truncate text-sm font-semibold leading-tight text-foreground">
+                      {app.name}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Badge className={cn('flex items-center gap-1', meta.badgeClass)}>
+                      <HostIcon className="h-3 w-3" />
+                      {meta.label}
+                    </Badge>
+                  </div>
+                  {normalizedUrl && (
+                    <a
+                      href={normalizedUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block truncate text-xs text-muted-foreground underline underline-offset-2"
+                    >
+                      {normalizedUrl.replace(/\/$/, '')}
+                    </a>
+                  )}
+                </div>
+                <div className="flex shrink-0 items-center gap-1 self-start">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem disabled={!canOpen} onClick={onToggleOpen}>
+                        {showOpen ? 'Disable Open button' : 'Enable Open button'}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => onPickIcon?.(app)}>
+                        Change icon
+                      </DropdownMenuItem>
+                      {normalizedUrl && (
+                        <DropdownMenuItem
+                          onClick={() => normalizedUrl && navigator.clipboard?.writeText(normalizedUrl)}
+                        >
+                          <Copy className="mr-2 h-4 w-4" />
+                          Copy URL
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuSeparator />
+                      {isHidden ? (
+                        <DropdownMenuItem onClick={onUnhide}>
+                          <Eye className="mr-2 h-4 w-4" />
+                          Unhide card
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem onClick={onHide}>
+                          <EyeOff className="mr-2 h-4 w-4" />
+                          Hide card
+                        </DropdownMenuItem>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 cursor-grab text-muted-foreground"
+                    title="Drag to reorder"
+                    {...dragHandleProps}
+                  >
+                    <GripVertical className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
             </div>
           </div>
-          {canOpen && normalizedUrl && (
-            <a
-              href={normalizedUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block text-xs text-muted-foreground underline underline-offset-2"
-            >
-              {normalizedUrl.replace(/\/$/, '')}
-            </a>
-          )}
-          <div className="flex flex-wrap gap-2">
-            {canOpen && normalizedUrl && (
-              <Button variant="outline" size="sm" asChild>
+          <div className={cn('flex flex-wrap items-center gap-2', compactActions && 'gap-1.5')}>
+            {showOpen && canOpen && normalizedUrl && (
+              <Button
+                variant="outline"
+                size="sm"
+                className={compactActions ? 'h-7 px-2 text-[11px] gap-1' : undefined}
+                asChild
+              >
                 <a href={normalizedUrl} target="_blank" rel="noopener noreferrer">
                   Open
                 </a>
@@ -2349,7 +2856,7 @@ function SortableAppCard({
                   size="sm"
                   variant="outline"
                   onClick={() => onAction('restart')}
-                  className="flex items-center gap-1"
+                  className={cn('flex items-center gap-1', compactActions && 'h-7 px-2 text-[11px]')}
                 >
                   <RotateCcw className="h-3 w-3" />
                   Restart
@@ -2358,7 +2865,7 @@ function SortableAppCard({
                   size="sm"
                   variant="destructive"
                   onClick={() => onAction('stop')}
-                  className="flex items-center gap-1"
+                  className={cn('flex items-center gap-1', compactActions && 'h-7 px-2 text-[11px]')}
                 >
                   <PowerOff className="h-3 w-3" />
                   Stop
@@ -2369,7 +2876,7 @@ function SortableAppCard({
                 size="sm"
                 variant="default"
                 onClick={() => onAction('start')}
-                className="flex items-center gap-1"
+                className={cn('flex items-center gap-1', compactActions && 'h-7 px-2 text-[11px]')}
               >
                 <Power className="h-3 w-3" />
                 Start
