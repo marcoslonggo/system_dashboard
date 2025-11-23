@@ -21,6 +21,10 @@ export async function GET() {
 
     return NextResponse.json({ success: true, data: status })
   } catch (error: any) {
+    // Handle missing table/record gracefully when DB is empty
+    if (error?.code === 'P2021') {
+      return NextResponse.json({ success: false, error: 'NUT config not set' }, { status: 404 })
+    }
     console.error('Failed to fetch NUT status', error)
     return NextResponse.json(
       { success: false, error: error?.message || 'Failed to fetch NUT status' },

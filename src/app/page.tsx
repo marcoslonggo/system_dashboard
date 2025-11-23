@@ -97,6 +97,11 @@ interface UserPreferences {
   hiddenApps: Record<string, boolean>
   openDisabled: Record<string, boolean>
   cardMinWidth: number
+  systemConfigs: StoredSystemConfig[]
+  nutConfig: NutConfig
+  autoRefresh: boolean
+  showHidden: boolean
+  config: DashboardPreferences
 }
 
 interface DashboardPreferences {
@@ -158,6 +163,16 @@ const USERNAME_STORAGE_KEY = 'dashboard-username'
 const DEFAULT_CARD_WIDTH = 240
 const MIN_CARD_WIDTH = 220
 const MOBILE_CARD_MIN_WIDTH = 170
+const DEFAULT_DASHBOARD_PREFS: DashboardPreferences = { refreshInterval: 5000, notifications: true }
+const DEFAULT_NUT_CONFIG: NutConfig = {
+  host: '',
+  port: 3493,
+  username: '',
+  password: '',
+  upsName: '',
+  enabled: false,
+  hasPassword: false
+}
 const DOCKER_ICON_FALLBACK = '/docker-icon.svg'
 
 const SYSTEM_META: Record<SystemInfo['type'], { label: string; badgeClass: string; icon: typeof HardDrive }> = {
@@ -305,10 +320,7 @@ export default function Dashboard() {
   const [searchTerm, setSearchTerm] = useState('')
   const [mobileControlsOpen, setMobileControlsOpen] = useState(false)
   const [serverDetails, setServerDetails] = useState<SystemInfo | null>(null)
-  const [config, setConfig] = useState<DashboardPreferences>({
-    refreshInterval: 5000,
-    notifications: true
-  })
+  const [config, setConfig] = useState<DashboardPreferences>(DEFAULT_DASHBOARD_PREFS)
   const [systemConfigs, setSystemConfigs] = useState<StoredSystemConfig[]>([])
   const [configForm, setConfigForm] = useState<SystemConfigForm>(emptyConfigForm)
   const [editingConfigId, setEditingConfigId] = useState<string | null>(null)
@@ -328,15 +340,7 @@ export default function Dashboard() {
   const [iconPickerTarget, setIconPickerTarget] = useState<AggregatedApp | null>(null)
   const [iconSearch, setIconSearch] = useState('')
   const [prefetchedIcons, setPrefetchedIcons] = useState<Record<string, boolean>>({})
-  const [nutConfig, setNutConfig] = useState<NutConfig>({
-    host: '',
-    port: 3493,
-    username: '',
-    password: '',
-    upsName: '',
-    enabled: false,
-    hasPassword: false
-  })
+  const [nutConfig, setNutConfig] = useState<NutConfig>(DEFAULT_NUT_CONFIG)
   const [nutStatus, setNutStatus] = useState<NutStatus | null>(null)
   const [nutLoading, setNutLoading] = useState(false)
   const [nutError, setNutError] = useState<string | null>(null)
@@ -350,6 +354,19 @@ export default function Dashboard() {
   const [copyFromUser, setCopyFromUser] = useState('')
   const groupSortableIds = useMemo(() => groups.map((g) => `group-item:${g.id}`), [groups])
   const saveDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const resetUserScopedState = useCallback(() => {
+    setGroups([])
+    setAppGroups({})
+    setAppOrder([])
+    setHiddenApps({})
+    setOpenDisabled({})
+    setCardMinWidth(DEFAULT_CARD_WIDTH)
+    setSystemConfigs([])
+    setNutConfig(DEFAULT_NUT_CONFIG)
+    setAutoRefresh(true)
+    setShowHidden(false)
+    setConfig(DEFAULT_DASHBOARD_PREFS)
+  }, [])
   const persistVisibility = useCallback(
     (hidden: Record<string, boolean>, openMap: Record<string, boolean>) => {
       if (typeof window === 'undefined') return
@@ -595,6 +612,11 @@ export default function Dashboard() {
   }, [fetchNutStatus])
 
   const fetchSystems = useCallback(async () => {
+    if (systemConfigs.length === 0) {
+      setSystems([])
+      setLastUpdated(null)
+      return
+    }
     try {
       const response = await fetch('/api/systems')
       if (!response.ok) {
@@ -620,13 +642,14 @@ export default function Dashboard() {
       }
     }, config.refreshInterval)
     return () => clearInterval(interval)
-  }, [autoRefresh, config.refreshInterval, fetchNutStatus, fetchSystems, nutConfigured, settingsOpen])
+  }, [autoRefresh, config.refreshInterval, fetchNutStatus, fetchSystems, nutConfigured, settingsOpen, systemConfigs.length])
 
   // Initial data fetch
   useEffect(() => {
+    if (username) return
     fetchSystems()
     fetchNutConfig()
-  }, [fetchSystems, fetchNutConfig])
+  }, [fetchSystems, fetchNutConfig, username])
 
   useEffect(() => {
     if (nutConfigured) {
@@ -943,6 +966,21 @@ export default function Dashboard() {
       if (typeof data.cardMinWidth === 'number' && data.cardMinWidth >= MIN_CARD_WIDTH) {
         setCardMinWidth(data.cardMinWidth)
       }
+      if (Array.isArray(data.systemConfigs)) setSystemConfigs(data.systemConfigs)
+      if (data.nutConfig && typeof data.nutConfig === 'object') {
+        setNutConfig((prev) => ({
+          ...prev,
+          ...data.nutConfig
+        }))
+      }
+      if (typeof data.autoRefresh === 'boolean') setAutoRefresh(data.autoRefresh)
+      if (typeof data.showHidden === 'boolean') setShowHidden(data.showHidden)
+      if (data.config && typeof data.config === 'object') {
+        setConfig((prev) => ({
+          ...prev,
+          ...data.config
+        }))
+      }
     },
     []
   )
@@ -952,20 +990,29 @@ export default function Dashboard() {
       if (!user) return
       try {
         const res = await fetch(`/api/preferences?username=${encodeURIComponent(user)}`)
-        if (!res.ok) return
+        if (!res.ok) {
+          resetUserScopedState()
+          return
+        }
         const json = await res.json()
-        hydratePreferences(json?.data)
+        if (json?.data) {
+          hydratePreferences(json.data)
+        } else {
+          resetUserScopedState()
+        }
       } catch (err) {
         console.warn('Failed to load preferences', err)
+        resetUserScopedState()
       }
     },
-    [hydratePreferences]
+    [hydratePreferences, resetUserScopedState]
   )
 
   useEffect(() => {
     if (!username) return
+    resetUserScopedState()
     fetchPreferences(username)
-  }, [username, fetchPreferences])
+  }, [username, fetchPreferences, resetUserScopedState])
 
   const persistPreferencesRemote = useCallback(async () => {
     if (!username) return
@@ -975,7 +1022,12 @@ export default function Dashboard() {
       appOrder,
       hiddenApps,
       openDisabled,
-      cardMinWidth
+      cardMinWidth,
+      systemConfigs,
+      nutConfig,
+      autoRefresh,
+      showHidden,
+      config
     }
     try {
       await fetch('/api/preferences', {
@@ -986,7 +1038,7 @@ export default function Dashboard() {
     } catch (err) {
       console.warn('Failed to save preferences', err)
     }
-  }, [username, groups, appGroups, appOrder, hiddenApps, openDisabled, cardMinWidth])
+  }, [username, groups, appGroups, appOrder, hiddenApps, openDisabled, cardMinWidth, systemConfigs, nutConfig, autoRefresh, showHidden, config])
 
   useEffect(() => {
     if (!username) return
@@ -1040,8 +1092,9 @@ export default function Dashboard() {
   }, [])
 
   useEffect(() => {
+    if (username) return
     refreshSystemConfigs()
-  }, [refreshSystemConfigs])
+  }, [refreshSystemConfigs, username])
 
   const prefetchIcon = useCallback((url?: string) => {
     if (!url || typeof window === 'undefined') return
