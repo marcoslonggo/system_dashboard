@@ -352,8 +352,10 @@ export default function Dashboard() {
   const [username, setUsername] = useState('')
   const [usernameInput, setUsernameInput] = useState('')
   const [copyFromUser, setCopyFromUser] = useState('')
+  const [selectedUser, setSelectedUser] = useState('')
   const groupSortableIds = useMemo(() => groups.map((g) => `group-item:${g.id}`), [groups])
   const saveDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const [userList, setUserList] = useState<string[]>([])
   const resetUserScopedState = useCallback(() => {
     setGroups([])
     setAppGroups({})
@@ -1008,11 +1010,32 @@ export default function Dashboard() {
     [hydratePreferences, resetUserScopedState]
   )
 
+  const fetchUsers = useCallback(async () => {
+    try {
+      const res = await fetch('/api/preferences')
+      if (!res.ok) return
+      const json = await res.json()
+      if (Array.isArray(json?.data)) {
+        setUserList(json.data)
+        if (selectedUser && !json.data.includes(selectedUser)) {
+          setSelectedUser('')
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load users', err)
+    }
+  }, [selectedUser])
+
   useEffect(() => {
     if (!username) return
     resetUserScopedState()
     fetchPreferences(username)
-  }, [username, fetchPreferences, resetUserScopedState])
+    fetchUsers()
+  }, [username, fetchPreferences, resetUserScopedState, fetchUsers])
+
+  useEffect(() => {
+    fetchUsers()
+  }, [fetchUsers])
 
   const persistPreferencesRemote = useCallback(async () => {
     if (!username) return
@@ -1045,11 +1068,12 @@ export default function Dashboard() {
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
       persistPreferencesRemote()
+      fetchUsers()
     }, 400)
     return () => {
       if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     }
-  }, [username, groups, appGroups, appOrder, hiddenApps, openDisabled, cardMinWidth, persistPreferencesRemote])
+  }, [username, groups, appGroups, appOrder, hiddenApps, openDisabled, cardMinWidth, persistPreferencesRemote, fetchUsers])
 
   const resetConfigForm = () => {
     setConfigForm(emptyConfigForm)
@@ -2020,6 +2044,127 @@ export default function Dashboard() {
               </div>
             </div>
             <div className="hidden items-center gap-4 md:flex">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    {username ? `Profile: ${username}` : 'Profile: none'}
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64">
+                  <div className="px-3 py-2">
+                    <p className="text-xs font-medium text-muted-foreground">Profiles</p>
+                  </div>
+                  {userList.length === 0 ? (
+                    <div className="px-3 py-2 space-y-2">
+                      <Input
+                        placeholder="New profile name"
+                        value={usernameInput}
+                        onChange={(e) => setUsernameInput(e.target.value)}
+                      />
+                      <Button
+                        variant="default"
+                        size="sm"
+                        disabled={!usernameInput.trim()}
+                        onClick={() => {
+                          const trimmed = usernameInput.trim()
+                          if (!trimmed) return
+                          setUsername(trimmed)
+                          setSelectedUser(trimmed)
+                          toast.success(`Created and switched to ${trimmed}`)
+                        }}
+                      >
+                        Create profile
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      {userList.map((user) => (
+                        <DropdownMenuItem
+                          key={user}
+                          onSelect={(e) => {
+                            e.preventDefault()
+                            setSelectedUser(user)
+                          }}
+                          className={cn(
+                            username === user && 'font-semibold',
+                            selectedUser === user && 'bg-accent text-accent-foreground'
+                          )}
+                        >
+                          {user}
+                        </DropdownMenuItem>
+                      ))}
+                      <DropdownMenuSeparator />
+                      <div className="px-3 py-2 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="default"
+                            size="sm"
+                            disabled={!selectedUser}
+                            onClick={() => {
+                              if (!selectedUser) return
+                              setUsername(selectedUser)
+                              toast.success(`Switched to ${selectedUser}`)
+                            }}
+                          >
+                            Use selected
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            disabled={!selectedUser}
+                            onClick={async () => {
+                              if (!selectedUser) return
+                              try {
+                                const res = await fetch(
+                                  `/api/preferences?username=${encodeURIComponent(selectedUser)}`,
+                                  { method: 'DELETE' }
+                                )
+                                if (res.ok) {
+                                  toast.success(`Deleted profile ${selectedUser}`)
+                                  if (username === selectedUser) setUsername('')
+                                  setSelectedUser('')
+                                  await fetchUsers()
+                                } else {
+                                  toast.error('Failed to delete profile')
+                                }
+                              } catch {
+                                toast.error('Failed to delete profile')
+                              }
+                            }}
+                          >
+                            Delete selected
+                          </Button>
+                        </div>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          disabled={!selectedUser || !username || selectedUser === username}
+                          onClick={async () => {
+                            if (!selectedUser || !username || selectedUser === username) return
+                            try {
+                              const res = await fetch('/api/preferences/copy', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ from: selectedUser, to: username })
+                              })
+                              if (res.ok) {
+                                await fetchPreferences(username)
+                                toast.success(`Copied ${selectedUser} into ${username}`)
+                              } else {
+                                toast.error('Failed to copy profile')
+                              }
+                            } catch {
+                              toast.error('Failed to copy profile')
+                            }
+                          }}
+                        >
+                          Copy selected into current
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
               <div className="flex items-center gap-2">
                 <Switch 
                   checked={autoRefresh}

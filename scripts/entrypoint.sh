@@ -10,7 +10,10 @@ fi
 
 echo "[entrypoint] Running prisma migrate deploy"
 if ! npx prisma migrate deploy --schema=/app/prisma/schema.prisma; then
-  echo "[entrypoint] Warning: prisma migrate deploy failed (continuing to start app)"
+  echo "[entrypoint] migrate deploy failed, attempting prisma db push"
+  if ! npx prisma db push --schema=/app/prisma/schema.prisma; then
+    echo "[entrypoint] prisma db push failed; proceeding without DB migration"
+  fi
 fi
 
 echo "[entrypoint] Starting Next.js server"
