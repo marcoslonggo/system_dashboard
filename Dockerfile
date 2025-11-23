@@ -1,8 +1,10 @@
 FROM node:20-alpine AS deps
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
 COPY prisma ./prisma
+# Ensure no local dev.db artifacts get baked into the image
+RUN rm -f prisma/dev.db prisma/dev.db-journal || true
+RUN npm ci
 RUN npx prisma generate --schema=prisma/schema.prisma
 
 FROM node:20-alpine AS builder

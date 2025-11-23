@@ -5,6 +5,9 @@ npm-debug.log
 README.md
 .next
 .git
+# sqlite artifacts should never ship
+prisma/dev.db
+prisma/dev.db-journal
 yarn.lock
 pnpm-lock.yaml
 test
