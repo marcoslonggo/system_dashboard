@@ -379,6 +379,7 @@ export default function Dashboard() {
     []
   )
   const prefsHydratedRef = useRef(false)
+  const nextProfileLoadModeRef = useRef<'auto' | 'manual' | 'create'>('manual')
   const isMobile = useIsMobile()
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -456,6 +457,8 @@ export default function Dashboard() {
     if (typeof window === 'undefined') return
     const storedUser = window.localStorage.getItem(USERNAME_STORAGE_KEY)
     if (storedUser) {
+      nextProfileLoadModeRef.current = 'auto'
+      setUsername(storedUser)
       setSelectedUser(storedUser)
       setUsernameInput(storedUser)
     }
@@ -993,7 +996,8 @@ export default function Dashboard() {
   )
 
   const fetchPreferences = useCallback(
-    async (user: string) => {
+    async (user: string, options?: { allowCreate?: boolean }) => {
+      const allowCreate = options?.allowCreate ?? false
       if (!user) return
       try {
         const res = await fetch(`/api/preferences?username=${encodeURIComponent(user)}`)
@@ -1006,9 +1010,21 @@ export default function Dashboard() {
         if (json?.data) {
           hydratePreferences(json.data)
           setProfileReady(true)
-        } else {
-          resetUserScopedState()
-          setProfileReady(false)
+          return
+        }
+        if (allowCreate) {
+          setSelectedUser(user)
+          setUserList((prev) => (prev.includes(user) ? prev : [...prev, user]))
+          setProfileReady(true)
+          return
+        }
+        resetUserScopedState()
+        setProfileReady(false)
+        setSelectedUser('')
+        setUsername('')
+        setUsernameInput('')
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem(USERNAME_STORAGE_KEY)
         }
       } catch (err) {
         console.warn('Failed to load preferences', err)
@@ -1026,7 +1042,7 @@ export default function Dashboard() {
       const json = await res.json()
       if (Array.isArray(json?.data)) {
         setUserList(json.data)
-        if (selectedUser && !json.data.includes(selectedUser)) {
+        if (selectedUser && selectedUser !== username && !json.data.includes(selectedUser)) {
           setSelectedUser('')
         }
       }
@@ -1039,8 +1055,11 @@ export default function Dashboard() {
     if (!username) return
     resetUserScopedState()
     setProfileReady(false)
-    fetchPreferences(username)
+    const loadMode = nextProfileLoadModeRef.current
+    const allowCreate = loadMode === 'create'
+    fetchPreferences(username, { allowCreate })
     fetchUsers()
+    nextProfileLoadModeRef.current = 'manual'
   }, [username, fetchPreferences, resetUserScopedState, fetchUsers])
 
   useEffect(() => {
@@ -1048,7 +1067,7 @@ export default function Dashboard() {
   }, [fetchUsers])
 
   const persistPreferencesRemote = useCallback(async () => {
-    if (!username) return
+    if (!username || !profileReady) return
     const payload: UserPreferences = {
       groups,
       appGroups,
@@ -1071,7 +1090,7 @@ export default function Dashboard() {
     } catch (err) {
       console.warn('Failed to save preferences', err)
     }
-  }, [username, groups, appGroups, appOrder, hiddenApps, openDisabled, cardMinWidth, systemConfigs, nutConfig, autoRefresh, showHidden, config])
+  }, [username, profileReady, groups, appGroups, appOrder, hiddenApps, openDisabled, cardMinWidth, systemConfigs, nutConfig, autoRefresh, showHidden, config])
 
   useEffect(() => {
     if (!username || !profileReady) return
@@ -1560,7 +1579,9 @@ export default function Dashboard() {
             onClick={() => {
               const trimmed = usernameInput.trim()
               if (!trimmed) return
+              nextProfileLoadModeRef.current = 'create'
               setUsername(trimmed)
+              setSelectedUser(trimmed)
               toast.success(`Profile set to ${trimmed}`)
             }}
             disabled={!usernameInput.trim()}
@@ -2078,9 +2099,10 @@ export default function Dashboard() {
                         onClick={() => {
                           const trimmed = usernameInput.trim()
                           if (!trimmed) return
+                          nextProfileLoadModeRef.current = 'create'
                           setUsername(trimmed)
                           setSelectedUser(trimmed)
-                          setProfileReady(true)
+                          setProfileReady(false)
                           toast.success(`Created and switched to ${trimmed}`)
                         }}
                       >
@@ -2111,36 +2133,42 @@ export default function Dashboard() {
                             variant="default"
                             size="sm"
                             disabled={!selectedUser}
-                            onClick={() => {
-                              if (!selectedUser) return
-                              setUsername(selectedUser)
-                              setProfileReady(true)
-                              toast.success(`Switched to ${selectedUser}`)
-                            }}
-                          >
-                            Use selected
+                          onClick={() => {
+                            if (!selectedUser) return
+                            nextProfileLoadModeRef.current = 'manual'
+                            setUsername(selectedUser)
+                            toast.success(`Switched to ${selectedUser}`)
+                          }}
+                        >
+                          Use selected
                           </Button>
                           <Button
                             variant="destructive"
                             size="sm"
                             disabled={!selectedUser}
-                            onClick={async () => {
-                              if (!selectedUser) return
-                              try {
-                                const res = await fetch(
-                                  `/api/preferences?username=${encodeURIComponent(selectedUser)}`,
-                                  { method: 'DELETE' }
-                                )
-                                if (res.ok) {
-                                  toast.success(`Deleted profile ${selectedUser}`)
-                                  if (username === selectedUser) setUsername('')
-                                  setSelectedUser('')
-                                  if (username === selectedUser) setProfileReady(false)
-                                  await fetchUsers()
-                                } else {
-                                  toast.error('Failed to delete profile')
+                          onClick={async () => {
+                            if (!selectedUser) return
+                            try {
+                              const res = await fetch(
+                                `/api/preferences?username=${encodeURIComponent(selectedUser)}`,
+                                { method: 'DELETE' }
+                              )
+                              if (res.ok) {
+                                toast.success(`Deleted profile ${selectedUser}`)
+                                if (username === selectedUser) {
+                                  setUsername('')
+                                  if (typeof window !== 'undefined') {
+                                    window.localStorage.removeItem(USERNAME_STORAGE_KEY)
+                                  }
+                                  nextProfileLoadModeRef.current = 'manual'
                                 }
-                              } catch {
+                                setSelectedUser('')
+                                if (username === selectedUser) setProfileReady(false)
+                                await fetchUsers()
+                              } else {
+                                toast.error('Failed to delete profile')
+                              }
+                            } catch {
                                 toast.error('Failed to delete profile')
                               }
                             }}
@@ -2156,23 +2184,46 @@ export default function Dashboard() {
                           if (!selectedUser || !username || selectedUser === username) return
                           try {
                             const res = await fetch('/api/preferences/copy', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ from: selectedUser, to: username })
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ from: selectedUser, to: username })
                             })
                             if (res.ok) {
                               await fetchPreferences(username)
-                              setProfileReady(true)
                               toast.success(`Copied ${selectedUser} into ${username}`)
                             } else {
                               toast.error('Failed to copy profile')
                             }
                           } catch {
-                              toast.error('Failed to copy profile')
+                            toast.error('Failed to copy profile')
                             }
                           }}
                         >
                           Copy selected into current
+                        </Button>
+                      </div>
+                      <DropdownMenuSeparator />
+                      <div className="px-3 py-2 space-y-2">
+                        <Input
+                          placeholder="New profile name"
+                          value={usernameInput}
+                          onChange={(e) => setUsernameInput(e.target.value)}
+                        />
+                        <Button
+                          variant="default"
+                          size="sm"
+                        disabled={!usernameInput.trim()}
+                        onClick={() => {
+                          const trimmed = usernameInput.trim()
+                          if (!trimmed) return
+                          nextProfileLoadModeRef.current = 'create'
+                          setUsername(trimmed)
+                          setSelectedUser(trimmed)
+                          setProfileReady(false)
+                          toast.success(`Created and switched to ${trimmed}`)
+                        }}
+                        >
+                          Create profile
                         </Button>
                       </div>
                     </>
