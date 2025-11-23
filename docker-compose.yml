@@ -1,0 +1,26 @@
+version: "3.9"
+
+services:
+  dashboard:
+    image: marcoslongo/dashboard:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      # Optional bootstrap defaults; you can also configure via the UI settings page.
+      # TRUENAS_HOST: ""
+      # TRUENAS_API_KEY: ""
+      # TRUENAS_PORT: "443"
+      # TRUENAS_ENABLED: "true"
+      # UNRAID_HOST: ""
+      # UNRAID_API_KEY: ""
+      # UNRAID_PORT: "80"
+      # UNRAID_ENABLED: "true"
+    volumes:
+      # Persist SQLite DB (/app/prisma/dev.db). Replace with a hostPath if desired.
+      - dashboard-prisma:/app/prisma
+
+volumes:
+  dashboard-prisma:
+    driver: local
