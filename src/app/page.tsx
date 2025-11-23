@@ -836,6 +836,26 @@ export default function Dashboard() {
       const overId = over.id as string
       if (overId === activeId) return
 
+      // Reorder groups
+      if (activeId.startsWith('group-item:')) {
+        const activeGroupId = activeId.replace('group-item:', '')
+        let targetGroupId: string | null = null
+        if (overId.startsWith('group-item:')) {
+          targetGroupId = overId.replace('group-item:', '')
+        } else if (overId.startsWith('group:')) {
+          targetGroupId = overId.replace('group:', '')
+        }
+        if (!targetGroupId || targetGroupId === activeGroupId) return
+        setGroups((prev) => {
+          const ids = prev.map((g) => g.id)
+          const oldIndex = ids.indexOf(activeGroupId)
+          const newIndex = ids.indexOf(targetGroupId)
+          if (oldIndex === -1 || newIndex === -1) return prev
+          return arrayMove(prev, oldIndex, newIndex)
+        })
+        return
+      }
+
       // Dropping on a group container
       if (overId.startsWith('group:')) {
         const targetGroupId = overId.replace('group:', '')
@@ -2520,7 +2540,7 @@ function SortableGroupContainer({
   )
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition
+    transition: transition || 'transform 150ms ease'
   }
 
   return (
@@ -2528,7 +2548,7 @@ function SortableGroupContainer({
       ref={setRefs}
       style={style}
       className={cn(
-        'space-y-2 rounded-md border border-border/60 bg-card/70 p-2',
+        'space-y-2 rounded-md border border-border/60 bg-card/70 p-2 transition-transform will-change-transform',
         isOver && 'border-primary/60 shadow-sm',
         isDragging && 'ring-2 ring-primary/30'
       )}
