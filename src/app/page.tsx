@@ -282,7 +282,7 @@ export default function Dashboard() {
   const [appOrder, setAppOrder] = useState<string[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [mobileControlsOpen, setMobileControlsOpen] = useState(false)
-  const [expandedSystem, setExpandedSystem] = useState<string | null>(null)
+  const [serverDetails, setServerDetails] = useState<SystemInfo | null>(null)
   const [config, setConfig] = useState<DashboardPreferences>({
     refreshInterval: 5000,
     notifications: true
@@ -495,20 +495,6 @@ export default function Dashboard() {
     }
   }, [fetchNutStatus, nutConfigured])
 
-  useEffect(() => {
-    if (isMobile) {
-      setExpandedSystem(null)
-      return
-    }
-    if (!systems.length) {
-      setExpandedSystem(null)
-      return
-    }
-    if (!expandedSystem || systems.every((system) => system.name !== expandedSystem)) {
-      setExpandedSystem(systems[0].name)
-    }
-  }, [expandedSystem, isMobile, systems])
-
   const appsWithMeta = useMemo<AggregatedApp[]>(() => {
     return systems.flatMap((system) =>
       system.apps.map((app) => ({
@@ -598,11 +584,6 @@ export default function Dashboard() {
       return haystack.includes(term)
     })
   }, [orderedApps, searchTerm])
-
-  const activeSystem = useMemo(
-    () => systems.find((system) => system.name === expandedSystem) || null,
-    [expandedSystem, systems]
-  )
 
   const resolveAppUrl = useCallback((rawUrl: string | undefined | null): ResolvedUrl => {
     const source = rawUrl || ''
@@ -1698,8 +1679,8 @@ export default function Dashboard() {
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Servers</h2>
-            {!isMobile && systems.length > 0 && (
-              <span className="text-xs text-muted-foreground">Tap a chip to expand details</span>
+            {systems.length > 0 && (
+              <span className="text-xs text-muted-foreground">Click a chip to view details</span>
             )}
           </div>
           {systems.length === 0 ? (
@@ -1712,61 +1693,24 @@ export default function Dashboard() {
           ) : (
             <div className="rounded-[var(--panel-radius)] border border-border/60 bg-card shadow-sm">
               <div className="flex flex-wrap gap-2 px-3 py-3 text-xs sm:text-sm">
-                {systems.map((system) => {
-                  const isActive = !isMobile && expandedSystem === system.name
-                  return (
-                    <button
-                      key={system.name}
-                      type="button"
-                      onClick={() => {
-                        if (isMobile) return
-                        setExpandedSystem((prev) => (prev === system.name ? null : system.name))
-                      }}
-                      className={cn(
-                        'flex items-center gap-3 rounded-full border px-3 py-2 transition hover:border-primary hover:text-foreground',
-                        isActive ? 'border-primary/70 bg-primary/5 shadow-sm' : 'border-border/70 bg-muted/50',
-                        isMobile && 'cursor-default'
-                      )}
-                    >
-                      <span className={`h-2 w-2 rounded-full ${getStatusColor(system.status)}`} />
-                      <span className="font-semibold text-foreground">{system.name}</span>
-                      <span className="text-muted-foreground">CPU {system.cpu}%</span>
-                      <span className="text-muted-foreground">RAM {system.memory}%</span>
-                      <span className="text-muted-foreground">Storage {system.storage}%</span>
-                    </button>
-                  )
-                })}
+                {systems.map((system) => (
+                  <button
+                    key={system.name}
+                    type="button"
+                    onClick={() => setServerDetails(system)}
+                    className={cn(
+                      'flex items-center gap-3 rounded-full border px-3 py-2 transition hover:border-primary hover:text-foreground',
+                      'border-border/70 bg-muted/50'
+                    )}
+                  >
+                    <span className={`h-2 w-2 rounded-full ${getStatusColor(system.status)}`} />
+                    <span className="font-semibold text-foreground">{system.name}</span>
+                    <span className="text-muted-foreground">CPU {system.cpu}%</span>
+                    <span className="text-muted-foreground">RAM {system.memory}%</span>
+                    <span className="text-muted-foreground">Storage {system.storage}%</span>
+                  </button>
+                ))}
               </div>
-              {!isMobile && activeSystem && (
-                <div className="flex flex-wrap gap-4 border-t px-4 py-3 text-xs sm:text-sm">
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Clock className="h-4 w-4" />
-                    <span>Uptime: {activeSystem.uptime}</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Thermometer className="h-4 w-4" />
-                    <span>Temp: {activeSystem.temperature}°C</span>
-                  </div>
-                  {typeof activeSystem.gpu === 'number' && (
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <Activity className="h-4 w-4" />
-                      <span>GPU: {activeSystem.gpu}%</span>
-                    </div>
-                  )}
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <HardDrive className="h-4 w-4" />
-                    <span>Storage: {activeSystem.storage}%</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <Cpu className="h-4 w-4" />
-                    <span>CPU: {activeSystem.cpu}%</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-muted-foreground">
-                    <MemoryStick className="h-4 w-4" />
-                    <span>Memory: {activeSystem.memory}%</span>
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -1987,6 +1931,60 @@ export default function Dashboard() {
             )
           ) : (
             <p className="text-sm text-muted-foreground">UPS monitoring is disabled.</p>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!serverDetails} onOpenChange={(open) => !open && setServerDetails(null)}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>{serverDetails?.name || 'Server Details'}</DialogTitle>
+            <DialogDescription>
+              {serverDetails?.type ? serverDetails.type.toUpperCase() : 'Server'} summary
+            </DialogDescription>
+          </DialogHeader>
+          {serverDetails ? (
+            <div className="space-y-4 text-sm">
+              <div className="flex items-center gap-2">
+                <span className={cn('h-2.5 w-2.5 rounded-full', getStatusColor(serverDetails.status))} />
+                <span className="font-medium capitalize">{serverDetails.status}</span>
+                <Badge variant="outline">{serverDetails.type}</Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-md border p-2">
+                  <p className="text-xs text-muted-foreground">Uptime</p>
+                  <p className="font-medium">{serverDetails.uptime}</p>
+                </div>
+                <div className="rounded-md border p-2">
+                  <p className="text-xs text-muted-foreground">CPU</p>
+                  <p className="font-medium">{serverDetails.cpu}%</p>
+                </div>
+                <div className="rounded-md border p-2">
+                  <p className="text-xs text-muted-foreground">Memory</p>
+                  <p className="font-medium">{serverDetails.memory}%</p>
+                </div>
+                <div className="rounded-md border p-2">
+                  <p className="text-xs text-muted-foreground">Storage</p>
+                  <p className="font-medium">{serverDetails.storage}%</p>
+                </div>
+                <div className="rounded-md border p-2">
+                  <p className="text-xs text-muted-foreground">Temperature</p>
+                  <p className="font-medium">{serverDetails.temperature}°C</p>
+                </div>
+                {typeof serverDetails.gpu === 'number' && (
+                  <div className="rounded-md border p-2">
+                    <p className="text-xs text-muted-foreground">GPU</p>
+                    <p className="font-medium">{serverDetails.gpu}%</p>
+                  </div>
+                )}
+              </div>
+              <div className="rounded-md border p-3">
+                <p className="text-xs text-muted-foreground">Applications</p>
+                <p className="font-medium">{serverDetails.apps?.length ?? 0} detected</p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Select a server to view details.</p>
           )}
         </DialogContent>
       </Dialog>
