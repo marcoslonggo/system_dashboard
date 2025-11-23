@@ -1530,6 +1530,13 @@ export default function Dashboard() {
     if (nutOnline) return 'bg-green-100 text-green-800'
     return 'bg-muted text-foreground'
   })()
+  const nutIndicatorDot = (() => {
+    if (!nutConfigured) return 'bg-muted-foreground/50'
+    if (nutError) return 'bg-destructive'
+    if (nutOnBattery) return 'bg-amber-500'
+    if (nutOnline) return 'bg-green-500'
+    return 'bg-muted-foreground/50'
+  })()
 
   return (
     <div className="min-h-screen bg-background">
@@ -1602,7 +1609,10 @@ export default function Dashboard() {
                         {nutRuntimeMinutes !== null ? ` • ${nutRuntimeMinutes}m` : ''}
                       </span>
                     </div>
-                    <Battery className="h-5 w-5 text-primary" />
+                    <div className="flex items-center gap-2">
+                      <span className={cn('h-2.5 w-2.5 rounded-full', nutIndicatorDot)} />
+                      <Battery className="h-5 w-5 text-primary" />
+                    </div>
                   </div>
                   <div className="flex items-center justify-between rounded-lg border px-4 py-3">
                     <div className="flex flex-col gap-1">
@@ -1635,6 +1645,7 @@ export default function Dashboard() {
                   nutIndicatorClass
                 )}
               >
+                <span className={cn('h-2 w-2 rounded-full', nutIndicatorDot)} />
                 <PlugZap className="h-3.5 w-3.5" />
                 <span>
                   {!nutConfigured
