@@ -78,9 +78,6 @@ export async function queryNutStatus(options: NutQueryOptions): Promise<NutStatu
   }
 
   try {
-    const hello = await nextLine()
-    if (!hello.startsWith('OK')) failEarly(`NUT greeting failed: ${hello}`)
-
     if (username) {
       await send(`USERNAME ${username}`)
       const res = await nextLine()
