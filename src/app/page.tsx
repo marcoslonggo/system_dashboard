@@ -353,6 +353,7 @@ export default function Dashboard() {
   const [usernameInput, setUsernameInput] = useState('')
   const [copyFromUser, setCopyFromUser] = useState('')
   const [selectedUser, setSelectedUser] = useState('')
+  const [profileReady, setProfileReady] = useState(false)
   const groupSortableIds = useMemo(() => groups.map((g) => `group-item:${g.id}`), [groups])
   const saveDebounceRef = useRef<NodeJS.Timeout | null>(null)
   const [userList, setUserList] = useState<string[]>([])
@@ -455,7 +456,7 @@ export default function Dashboard() {
     if (typeof window === 'undefined') return
     const storedUser = window.localStorage.getItem(USERNAME_STORAGE_KEY)
     if (storedUser) {
-      setUsername(storedUser)
+      setSelectedUser(storedUser)
       setUsernameInput(storedUser)
     }
   }, [])
@@ -513,7 +514,11 @@ export default function Dashboard() {
   }, [groups])
 
   useEffect(() => {
-    if (!username || typeof window === 'undefined') return
+    if (typeof window === 'undefined') return
+    if (!username) {
+      window.localStorage.removeItem(USERNAME_STORAGE_KEY)
+      return
+    }
     window.localStorage.setItem(USERNAME_STORAGE_KEY, username)
   }, [username])
 
@@ -994,17 +999,21 @@ export default function Dashboard() {
         const res = await fetch(`/api/preferences?username=${encodeURIComponent(user)}`)
         if (!res.ok) {
           resetUserScopedState()
+          setProfileReady(false)
           return
         }
         const json = await res.json()
         if (json?.data) {
           hydratePreferences(json.data)
+          setProfileReady(true)
         } else {
           resetUserScopedState()
+          setProfileReady(false)
         }
       } catch (err) {
         console.warn('Failed to load preferences', err)
         resetUserScopedState()
+        setProfileReady(false)
       }
     },
     [hydratePreferences, resetUserScopedState]
@@ -1029,6 +1038,7 @@ export default function Dashboard() {
   useEffect(() => {
     if (!username) return
     resetUserScopedState()
+    setProfileReady(false)
     fetchPreferences(username)
     fetchUsers()
   }, [username, fetchPreferences, resetUserScopedState, fetchUsers])
@@ -1064,7 +1074,7 @@ export default function Dashboard() {
   }, [username, groups, appGroups, appOrder, hiddenApps, openDisabled, cardMinWidth, systemConfigs, nutConfig, autoRefresh, showHidden, config])
 
   useEffect(() => {
-    if (!username) return
+    if (!username || !profileReady) return
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     saveDebounceRef.current = setTimeout(() => {
       persistPreferencesRemote()
@@ -1073,7 +1083,7 @@ export default function Dashboard() {
     return () => {
       if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current)
     }
-  }, [username, groups, appGroups, appOrder, hiddenApps, openDisabled, cardMinWidth, persistPreferencesRemote, fetchUsers])
+  }, [username, profileReady, groups, appGroups, appOrder, hiddenApps, openDisabled, cardMinWidth, persistPreferencesRemote, fetchUsers])
 
   const resetConfigForm = () => {
     setConfigForm(emptyConfigForm)
@@ -2070,6 +2080,7 @@ export default function Dashboard() {
                           if (!trimmed) return
                           setUsername(trimmed)
                           setSelectedUser(trimmed)
+                          setProfileReady(true)
                           toast.success(`Created and switched to ${trimmed}`)
                         }}
                       >
@@ -2103,6 +2114,7 @@ export default function Dashboard() {
                             onClick={() => {
                               if (!selectedUser) return
                               setUsername(selectedUser)
+                              setProfileReady(true)
                               toast.success(`Switched to ${selectedUser}`)
                             }}
                           >
@@ -2123,6 +2135,7 @@ export default function Dashboard() {
                                   toast.success(`Deleted profile ${selectedUser}`)
                                   if (username === selectedUser) setUsername('')
                                   setSelectedUser('')
+                                  if (username === selectedUser) setProfileReady(false)
                                   await fetchUsers()
                                 } else {
                                   toast.error('Failed to delete profile')
@@ -2138,22 +2151,23 @@ export default function Dashboard() {
                         <Button
                           variant="secondary"
                           size="sm"
-                          disabled={!selectedUser || !username || selectedUser === username}
-                          onClick={async () => {
-                            if (!selectedUser || !username || selectedUser === username) return
-                            try {
-                              const res = await fetch('/api/preferences/copy', {
+                        disabled={!selectedUser || !username || selectedUser === username}
+                        onClick={async () => {
+                          if (!selectedUser || !username || selectedUser === username) return
+                          try {
+                            const res = await fetch('/api/preferences/copy', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ from: selectedUser, to: username })
-                              })
-                              if (res.ok) {
-                                await fetchPreferences(username)
-                                toast.success(`Copied ${selectedUser} into ${username}`)
-                              } else {
-                                toast.error('Failed to copy profile')
-                              }
-                            } catch {
+                            })
+                            if (res.ok) {
+                              await fetchPreferences(username)
+                              setProfileReady(true)
+                              toast.success(`Copied ${selectedUser} into ${username}`)
+                            } else {
+                              toast.error('Failed to copy profile')
+                            }
+                          } catch {
                               toast.error('Failed to copy profile')
                             }
                           }}
