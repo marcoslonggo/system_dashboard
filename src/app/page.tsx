@@ -7,7 +7,6 @@ import { CSS } from '@dnd-kit/utilities'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Progress } from '@/components/ui/progress'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
@@ -2324,40 +2323,8 @@ function SortableAppCard({
                 <span className={`h-1.5 w-1.5 rounded-full ${getStatusColor(app.systemStatus)}`} />
                 <span className="capitalize">{app.systemStatus}</span>
               </div>
-              <div className="flex items-center gap-2">
-                <Switch checked={showHidden} onCheckedChange={setShowHidden} id="show-hidden" />
-                <Label htmlFor="show-hidden" className="text-xs sm:text-sm">
-                  Show hidden
-                </Label>
-              </div>
             </div>
           </div>
-          {(hasCpu || hasMemory) ? (
-            <div className="grid grid-cols-2 gap-3">
-              {hasCpu && (
-                <div>
-                  <div className="flex items-center justify-between text-xs uppercase text-muted-foreground">
-                    <span>CPU</span>
-                    <span>{app.cpu}%</span>
-                  </div>
-                  <Progress value={Math.min(Math.max(app.cpu ?? 0, 0), 100)} className="h-2" />
-                </div>
-              )}
-              {hasMemory && (
-                <div>
-                  <div className="flex items-center justify-between text-xs uppercase text-muted-foreground">
-                    <span>Memory</span>
-                    <span>{app.memory}%</span>
-                  </div>
-                  <Progress value={Math.min(Math.max(app.memory ?? 0, 0), 100)} className="h-2" />
-                </div>
-              )}
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              Container metrics not available from this system.
-            </p>
-          )}
           {canOpen && normalizedUrl && (
             <a
               href={normalizedUrl}

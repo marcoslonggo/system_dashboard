@@ -368,6 +368,14 @@ To deliver a first-class mobile experience we are executing the following milest
 
 Use this section as the source of truth for mobile-related tasks.
 
+## Recent UI & UPS Enhancements
+
+- Added UPS (NUT) monitoring: configure host/port/user/password/UPS name, test connection, and show charge/runtime + status dot in the header/drawer with a details dialog.
+- Server chips now open a details dialog (uptime, CPU, RAM, storage, temp, GPU, app count), removing the inline bar.
+- App cards were simplified: no container metrics; compact layout with host badge, status dot, URL, and host CPU/RAM summary.
+- Per-card menu (3 dots): toggle Open button, change icon, copy URL, hide/unhide card. Hidden state and Open toggle persist; “Show hidden” toggle added above the grid.
+- UPS status colors: green (online), yellow (on battery), red (error), muted when disabled/offline.
+
 ## 🔧 Troubleshooting
 
 ### Common Issues
