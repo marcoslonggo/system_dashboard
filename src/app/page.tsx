@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import { slugify as sharedSlugify } from '@/lib/slugify'
 import { Slider } from '@/components/ui/slider'
@@ -41,7 +42,11 @@ import {
   Search,
   SlidersHorizontal,
   Battery,
-  PlugZap
+  PlugZap,
+  MoreVertical,
+  Eye,
+  EyeOff,
+  Copy
 } from 'lucide-react'
 import { validateHost, validatePort } from '@/lib/system-config-validation'
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -135,6 +140,7 @@ interface SystemConfigForm {
 const APP_ORDER_STORAGE_KEY = 'dashboard-app-order'
 const CARD_WIDTH_STORAGE_KEY = 'dashboard-card-width'
 const DASHBOARD_PREFS_STORAGE_KEY = 'dashboard-preferences'
+const APP_VISIBILITY_STORAGE_KEY = 'dashboard-app-visibility'
 const DEFAULT_CARD_WIDTH = 320
 const DOCKER_ICON_FALLBACK = '/docker-icon.svg'
 
@@ -298,6 +304,9 @@ export default function Dashboard() {
     message?: string
     signature?: string
   }>({ status: 'idle' })
+  const [hiddenApps, setHiddenApps] = useState<Record<string, boolean>>({})
+  const [openDisabled, setOpenDisabled] = useState<Record<string, boolean>>({})
+  const [showHidden, setShowHidden] = useState(false)
   const [iconOverrides, setIconOverrides] = useState<Record<string, string>>({})
   const [iconCatalog, setIconCatalog] = useState<{ slug: string; url: string }[]>([])
   const [iconPickerTarget, setIconPickerTarget] = useState<AggregatedApp | null>(null)
@@ -317,6 +326,14 @@ export default function Dashboard() {
   const [nutError, setNutError] = useState<string | null>(null)
   const [nutMessage, setNutMessage] = useState<string | null>(null)
   const [nutDetailsOpen, setNutDetailsOpen] = useState(false)
+  const persistVisibility = useCallback(
+    (hidden: Record<string, boolean>, openMap: Record<string, boolean>) => {
+      if (typeof window === 'undefined') return
+      const payload = { hidden, openDisabled: openMap }
+      window.localStorage.setItem(APP_VISIBILITY_STORAGE_KEY, JSON.stringify(payload))
+    },
+    []
+  )
   const prefsHydratedRef = useRef(false)
   const isMobile = useIsMobile()
   const sensors = useSensors(
@@ -352,6 +369,28 @@ export default function Dashboard() {
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const stored = window.localStorage.getItem(APP_VISIBILITY_STORAGE_KEY)
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored)
+        if (parsed?.hidden && typeof parsed.hidden === 'object') {
+          setHiddenApps(parsed.hidden)
+        }
+        if (parsed?.openDisabled && typeof parsed.openDisabled === 'object') {
+          setOpenDisabled(parsed.openDisabled)
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    persistVisibility(hiddenApps, openDisabled)
+  }, [hiddenApps, openDisabled, persistVisibility])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -578,12 +617,30 @@ export default function Dashboard() {
 
   const visibleApps = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
-    if (!term) return orderedApps
-    return orderedApps.filter((app) => {
+    const base = orderedApps.filter((app) => (showHidden ? true : !hiddenApps[app.globalId]))
+    if (!term) return base
+    return base.filter((app) => {
       const haystack = `${app.name} ${app.systemName} ${app.slug || ''} ${app.status}`.toLowerCase()
       return haystack.includes(term)
     })
-  }, [orderedApps, searchTerm])
+  }, [orderedApps, searchTerm, hiddenApps, showHidden])
+
+  useEffect(() => {
+    setHiddenApps((prev) => {
+      const next: Record<string, boolean> = {}
+      currentAppIds.forEach((id) => {
+        if (prev[id]) next[id] = true
+      })
+      return next
+    })
+    setOpenDisabled((prev) => {
+      const next: Record<string, boolean> = {}
+      currentAppIds.forEach((id) => {
+        if (prev[id]) next[id] = true
+      })
+      return next
+    })
+  }, [currentAppIds])
 
   const resolveAppUrl = useCallback((rawUrl: string | undefined | null): ResolvedUrl => {
     const source = rawUrl || ''
@@ -1724,11 +1781,11 @@ export default function Dashboard() {
                 Reorder cards and manage containers from a unified view.
               </p>
             </div>
-            <div className="flex flex-col gap-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-end">
-              <div className="flex items-center gap-3">
-                <span>Card size</span>
-                <Slider
-                  className="w-40"
+          <div className="flex flex-col gap-2 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-end">
+            <div className="flex items-center gap-3">
+              <span>Card size</span>
+              <Slider
+                className="w-40"
                   min={220}
                   max={420}
                   step={20}
@@ -1778,6 +1835,8 @@ export default function Dashboard() {
                     const resolved = appLinkMap[app.globalId]
                     const normalized = resolved?.url ?? normalizeAppUrl(app.url)
                     const isWeb = isLikelyWebUrl(normalized)
+                    const isHidden = hiddenApps[app.globalId]
+                    const openEnabled = !openDisabled[app.globalId]
                     return (
                       <SortableAppCard
                         key={app.globalId}
@@ -1790,6 +1849,27 @@ export default function Dashboard() {
                         isMobile={isMobile}
                         resolvedUrl={normalized}
                         isWeb={isWeb}
+                        isHidden={!!isHidden}
+                        showOpen={!!(normalized && isWeb && openEnabled)}
+                        onToggleOpen={() =>
+                          setOpenDisabled((prev) => {
+                            const next = { ...prev, [app.globalId]: !prev[app.globalId] }
+                            return next
+                          })
+                        }
+                        onHide={() =>
+                          setHiddenApps((prev) => ({
+                            ...prev,
+                            [app.globalId]: true
+                          }))
+                        }
+                        onUnhide={() =>
+                          setHiddenApps((prev) => {
+                            const next = { ...prev }
+                            delete next[app.globalId]
+                            return next
+                          })
+                        }
                       />
                     )
                   })}
@@ -2025,6 +2105,11 @@ type SortableAppCardProps = {
   isMobile: boolean
   resolvedUrl?: string | null
   isWeb?: boolean
+  isHidden?: boolean
+  showOpen?: boolean
+  onToggleOpen?: () => void
+  onHide?: () => void
+  onUnhide?: () => void
 }
 
 function SortableAppCard({
@@ -2034,15 +2119,18 @@ function SortableAppCard({
   onPickIcon,
   isMobile,
   resolvedUrl,
-  isWeb
+  isWeb,
+  isHidden,
+  showOpen = true,
+  onToggleOpen,
+  onHide,
+  onUnhide
 }: SortableAppCardProps) {
   const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
     id: app.globalId
   })
   const meta = SYSTEM_META[app.systemType]
   const HostIcon = meta.icon
-  const hasCpu = typeof app.cpu === 'number'
-  const hasMemory = typeof app.memory === 'number'
   const fallbackIcon = app.fallbackIcon || DOCKER_ICON_FALLBACK
   const normalizedUrl = resolvedUrl ?? null
   const canOpen = Boolean(normalizedUrl && isWeb)
@@ -2097,40 +2185,56 @@ function SortableAppCard({
                     <span className="capitalize">{app.status}</span>
                   </div>
                 </div>
-                {app.slug && onPickIcon && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground"
-                    onClick={() => onPickIcon(app)}
-                    title="Customize icon"
-                  >
-                    <ImageIcon className="h-4 w-4" />
-                  </Button>
-                )}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground">
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem disabled={!canOpen} onClick={onToggleOpen}>
+                      {showOpen ? 'Disable Open button' : 'Enable Open button'}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => onPickIcon?.(app)}>
+                      Change icon
+                    </DropdownMenuItem>
+                    {normalizedUrl && (
+                      <DropdownMenuItem
+                        onClick={() => normalizedUrl && navigator.clipboard?.writeText(normalizedUrl)}
+                      >
+                        <Copy className="mr-2 h-4 w-4" />
+                        Copy URL
+                      </DropdownMenuItem>
+                    )}
+                    <DropdownMenuSeparator />
+                    {isHidden ? (
+                      <DropdownMenuItem onClick={onUnhide}>
+                        <Eye className="mr-2 h-4 w-4" />
+                        Unhide card
+                      </DropdownMenuItem>
+                    ) : (
+                      <DropdownMenuItem onClick={onHide}>
+                        <EyeOff className="mr-2 h-4 w-4" />
+                        Hide card
+                      </DropdownMenuItem>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
                 <span className="flex items-center gap-1">
                   <Cpu className="h-3 w-3" />
-                  {hasCpu ? `${app.cpu}% CPU` : 'CPU n/a'}
-                </span>
-                <span className="flex items-center gap-1">
-                  <MemoryStick className="h-3 w-3" />
-                  {hasMemory ? `${app.memory}% RAM` : 'RAM n/a'}
-                </span>
-                <span className="flex items-center gap-1">
-                  <Activity className="h-3 w-3" />
                   Host {app.hostCpu}% CPU
                 </span>
                 <span className="flex items-center gap-1">
-                  <Thermometer className="h-3 w-3" />
+                  <MemoryStick className="h-3 w-3" />
                   Host {app.hostMemory}% RAM
                 </span>
               </div>
             </div>
           </CardContent>
           <CardContent className="flex flex-wrap items-center gap-2 border-t px-3 py-2">
-            {canOpen && normalizedUrl && (
+            {showOpen && canOpen && normalizedUrl && (
               <Button variant="default" size="sm" asChild>
                 <a href={normalizedUrl} target="_blank" rel="noopener noreferrer">
                   Open
@@ -2219,6 +2323,12 @@ function SortableAppCard({
               <div className="flex items-center gap-1">
                 <span className={`h-1.5 w-1.5 rounded-full ${getStatusColor(app.systemStatus)}`} />
                 <span className="capitalize">{app.systemStatus}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch checked={showHidden} onCheckedChange={setShowHidden} id="show-hidden" />
+                <Label htmlFor="show-hidden" className="text-xs sm:text-sm">
+                  Show hidden
+                </Label>
               </div>
             </div>
           </div>
