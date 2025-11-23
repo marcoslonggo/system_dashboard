@@ -1047,6 +1047,101 @@ export default function Dashboard() {
 
   const renderSettingsContent = (padded = false) => (
     <div className={cn('space-y-6', padded && 'pb-4')}>
+      <div className="space-y-3">
+        <h3 className="text-lg font-semibold">UPS (NUT) Monitoring</h3>
+        <p className="text-sm text-muted-foreground">
+          Connect to a Network UPS Tools (NUT) daemon to show charge/runtime in the header.
+        </p>
+        {nutError && (
+          <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {nutError}
+          </div>
+        )}
+        <Card className="border-border/60">
+          <CardContent className="space-y-4 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <PlugZap className="h-4 w-4 text-primary" />
+                <span className="text-sm font-medium">
+                  {nutConfigured ? 'UPS Enabled' : 'UPS Disabled'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch
+                  checked={nutConfig.enabled}
+                  onCheckedChange={(checked) => {
+                    setNutConfig((prev) => ({ ...prev, enabled: checked }))
+                    if (!checked) {
+                      setNutStatus(null)
+                      setNutMessage(null)
+                      setNutError(null)
+                    }
+                  }}
+                />
+                <span className="text-sm text-muted-foreground">Enabled</span>
+              </div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Host/IP</Label>
+                <Input
+                  value={nutConfig.host}
+                  onChange={(e) => setNutConfig((prev) => ({ ...prev, host: e.target.value }))}
+                  placeholder="192.168.1.24"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Port</Label>
+                <Input
+                  type="number"
+                  value={nutConfig.port}
+                  onChange={(e) => setNutConfig((prev) => ({ ...prev, port: Number(e.target.value) }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Username</Label>
+                <Input
+                  value={nutConfig.username}
+                  onChange={(e) => setNutConfig((prev) => ({ ...prev, username: e.target.value }))}
+                  placeholder="upsmon"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Password</Label>
+                <Input
+                  type="password"
+                  value={nutConfig.password}
+                  onChange={(e) => setNutConfig((prev) => ({ ...prev, password: e.target.value }))}
+                  placeholder={nutConfig.hasPassword ? '•••••••• (leave blank to keep)' : ''}
+                />
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label>UPS Name (optional)</Label>
+                <Input
+                  value={nutConfig.upsName || ''}
+                  onChange={(e) => setNutConfig((prev) => ({ ...prev, upsName: e.target.value }))}
+                  placeholder="ups"
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" onClick={fetchNutStatus} disabled={nutLoading}>
+                {nutLoading ? 'Testing...' : 'Test connection'}
+              </Button>
+              <Button onClick={handleSaveNutConfig} disabled={nutLoading}>
+                Save UPS settings
+              </Button>
+              {nutMessage && (
+                <span className="text-xs text-green-700">{nutMessage}</span>
+              )}
+              {nutError && (
+                <span className="text-xs text-destructive">{nutError}</span>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       <div className="space-y-4">
         <div>
           <h3 className="text-lg font-semibold">Connected Systems</h3>
@@ -1401,96 +1496,6 @@ export default function Dashboard() {
           <Label htmlFor="notifications">Enable notifications</Label>
         </div>
       </div>
-
-      <Separator />
-
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-medium">UPS (NUT) Monitoring</h3>
-            <p className="text-sm text-muted-foreground">
-              Connect to a Network UPS Tools (NUT) daemon to show charge/runtime in the header.
-            </p>
-          </div>
-          <span
-            className={cn(
-              'rounded-full px-3 py-1 text-xs',
-              nutOnline ? 'bg-green-100 text-green-800' : 'bg-muted text-foreground'
-            )}
-          >
-            {nutOnline ? 'Online' : 'Offline'}
-          </span>
-        </div>
-        {nutError && (
-          <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-            {nutError}
-          </div>
-        )}
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="space-y-2">
-            <Label>Host/IP</Label>
-            <Input
-              value={nutConfig.host}
-              onChange={(e) => setNutConfig((prev) => ({ ...prev, host: e.target.value }))}
-              placeholder="192.168.1.10"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Port</Label>
-            <Input
-              type="number"
-              value={nutConfig.port}
-              onChange={(e) => setNutConfig((prev) => ({ ...prev, port: Number(e.target.value) }))}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Username</Label>
-            <Input
-              value={nutConfig.username}
-              onChange={(e) => setNutConfig((prev) => ({ ...prev, username: e.target.value }))}
-              placeholder="upsmon"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>Password</Label>
-            <Input
-              type="password"
-              value={nutConfig.password}
-              onChange={(e) => setNutConfig((prev) => ({ ...prev, password: e.target.value }))}
-              placeholder={nutConfig.hasPassword ? '•••••••• (leave blank to keep)' : ''}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>UPS Name (optional)</Label>
-            <Input
-              value={nutConfig.upsName || ''}
-              onChange={(e) => setNutConfig((prev) => ({ ...prev, upsName: e.target.value }))}
-              placeholder="auto-detect first UPS"
-            />
-          </div>
-          <div className="flex items-center gap-2 pt-6">
-            <Switch
-              checked={nutConfig.enabled}
-              onCheckedChange={(checked) => setNutConfig((prev) => ({ ...prev, enabled: checked }))}
-            />
-            <Label>Enabled</Label>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={fetchNutStatus} disabled={nutLoading}>
-            {nutLoading ? 'Testing...' : 'Test connection'}
-          </Button>
-          <Button onClick={handleSaveNutConfig} disabled={nutLoading}>
-            Save UPS settings
-          </Button>
-          {nutStatus && nutOnline && (
-            <span className="text-xs text-muted-foreground">
-              {nutStatus.upsName}: {nutCharge !== null ? `${nutCharge}%` : '—'} charge
-              {nutRuntimeMinutes !== null ? ` • ${nutRuntimeMinutes}m runtime` : ''}
-            </span>
-          )}
-        </div>
-      </div>
     </div>
   )
 
@@ -1516,6 +1521,15 @@ export default function Dashboard() {
   const nutCharge = typeof nutStatus?.charge === 'number' ? nutStatus.charge : null
   const nutOnline =
     nutStatus?.status && nutStatus.status.toLowerCase().includes('online') && !nutError
+  const nutOnBattery =
+    nutStatus?.status && nutStatus.status.toLowerCase().includes('ob') && !nutError
+  const nutIndicatorClass = (() => {
+    if (!nutConfigured) return 'bg-muted text-foreground'
+    if (nutError) return 'bg-destructive/20 text-destructive'
+    if (nutOnBattery) return 'bg-amber-100 text-amber-900'
+    if (nutOnline) return 'bg-green-100 text-green-800'
+    return 'bg-muted text-foreground'
+  })()
 
   return (
     <div className="min-h-screen bg-background">
@@ -1577,7 +1591,13 @@ export default function Dashboard() {
                     <div className="flex flex-col gap-1">
                       <span className="text-sm font-medium">UPS</span>
                       <span className="text-xs text-muted-foreground">
-                        {nutOnline ? 'Online' : 'Offline'}
+                        {!nutConfigured
+                          ? 'Disabled'
+                          : nutError
+                            ? 'Error'
+                            : nutOnBattery
+                              ? 'On Battery'
+                              : 'Online'}
                         {nutCharge !== null ? ` • ${nutCharge}%` : ''}
                         {nutRuntimeMinutes !== null ? ` • ${nutRuntimeMinutes}m` : ''}
                       </span>
@@ -1609,13 +1629,24 @@ export default function Dashboard() {
               <Activity className="h-4 w-4" />
               <span>Last updated: {lastUpdatedLabel}</span>
               <span className="rounded-full bg-muted px-2 py-1 text-xs text-foreground">{appTotalsLabel}</span>
-              <span className="hidden items-center gap-2 rounded-full border px-2 py-1 text-xs text-foreground sm:flex">
-                <PlugZap className="h-3.5 w-3.5 text-primary" />
-                <span>{nutOnline ? 'UPS Online' : 'UPS Offline'}</span>
-                {nutCharge !== null && <span className="text-muted-foreground">{nutCharge}%</span>}
-                {nutRuntimeMinutes !== null && (
-                  <span className="text-muted-foreground">{nutRuntimeMinutes}m</span>
+              <span
+                className={cn(
+                  'hidden items-center gap-2 rounded-full border px-2 py-1 text-xs sm:flex',
+                  nutIndicatorClass
                 )}
+              >
+                <PlugZap className="h-3.5 w-3.5" />
+                <span>
+                  {!nutConfigured
+                    ? 'UPS Disabled'
+                    : nutError
+                      ? 'UPS Error'
+                      : nutOnBattery
+                        ? 'On Battery'
+                        : 'UPS Online'}
+                </span>
+                {nutCharge !== null && <span className="opacity-80">{nutCharge}%</span>}
+                {nutRuntimeMinutes !== null && <span className="opacity-80">{nutRuntimeMinutes}m</span>}
               </span>
             </div>
             <div className="w-full md:max-w-xl">
