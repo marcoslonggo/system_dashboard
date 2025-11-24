@@ -43,7 +43,8 @@ import {
   MoreVertical,
   Eye,
   EyeOff,
-  Copy
+  Copy,
+  User
 } from 'lucide-react'
 import { validateHost, validatePort } from '@/lib/system-config-validation'
 import { useIsMobile } from '@/hooks/use-mobile'
@@ -640,7 +641,7 @@ export default function Dashboard() {
     } catch (error) {
       console.error('Failed to fetch system data:', error)
     }
-  }, [])
+  }, [systemConfigs.length])
 
   // Auto-refresh effect
   useEffect(() => {
@@ -2061,6 +2062,156 @@ export default function Dashboard() {
     if (nutOnline) return 'bg-green-500'
     return 'bg-muted-foreground/50'
   })()
+  const renderProfileMenuContent = () => (
+    <>
+      <div className="px-3 py-2">
+        <p className="text-xs font-medium text-muted-foreground">Profiles</p>
+      </div>
+      {userList.length === 0 ? (
+        <div className="px-3 py-2 space-y-2">
+          <Input
+            placeholder="New profile name"
+            value={usernameInput}
+            onChange={(e) => setUsernameInput(e.target.value)}
+          />
+          <Button
+            variant="default"
+            size="sm"
+            disabled={!usernameInput.trim()}
+            onClick={() => {
+              const trimmed = usernameInput.trim()
+              if (!trimmed) return
+              nextProfileLoadModeRef.current = 'create'
+              setUsername(trimmed)
+              setSelectedUser(trimmed)
+              setProfileReady(false)
+              toast.success(`Created and switched to ${trimmed}`)
+            }}
+          >
+            Create profile
+          </Button>
+        </div>
+      ) : (
+        <>
+          {userList.map((user) => (
+            <DropdownMenuItem
+              key={user}
+              onSelect={(e) => {
+                e.preventDefault()
+                setSelectedUser(user)
+              }}
+              className={cn(
+                username === user && 'font-semibold',
+                selectedUser === user && 'bg-accent text-accent-foreground'
+              )}
+            >
+              {user}
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <div className="px-3 py-2 space-y-2">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="default"
+                size="sm"
+                disabled={!selectedUser}
+                onClick={() => {
+                  if (!selectedUser) return
+                  nextProfileLoadModeRef.current = 'manual'
+                  setUsername(selectedUser)
+                  toast.success(`Switched to ${selectedUser}`)
+                }}
+              >
+                Use selected
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={!selectedUser}
+                onClick={async () => {
+                  if (!selectedUser) return
+                  try {
+                    const res = await fetch(
+                      `/api/preferences?username=${encodeURIComponent(selectedUser)}`,
+                      { method: 'DELETE' }
+                    )
+                    if (res.ok) {
+                      toast.success(`Deleted profile ${selectedUser}`)
+                      if (username === selectedUser) {
+                        setUsername('')
+                        if (typeof window !== 'undefined') {
+                          window.localStorage.removeItem(USERNAME_STORAGE_KEY)
+                        }
+                        nextProfileLoadModeRef.current = 'manual'
+                      }
+                      setSelectedUser('')
+                      if (username === selectedUser) setProfileReady(false)
+                      await fetchUsers()
+                    } else {
+                      toast.error('Failed to delete profile')
+                    }
+                  } catch {
+                    toast.error('Failed to delete profile')
+                  }
+                }}
+              >
+                Delete selected
+              </Button>
+            </div>
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!selectedUser || !username || selectedUser === username}
+              onClick={async () => {
+                if (!selectedUser || !username || selectedUser === username) return
+                try {
+                  const res = await fetch('/api/preferences/copy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ from: selectedUser, to: username })
+                  })
+                  if (res.ok) {
+                    await fetchPreferences(username)
+                    toast.success(`Copied ${selectedUser} into ${username}`)
+                  } else {
+                    toast.error('Failed to copy profile')
+                  }
+                } catch {
+                  toast.error('Failed to copy profile')
+                }
+              }}
+            >
+              Copy selected into current
+            </Button>
+          </div>
+          <DropdownMenuSeparator />
+          <div className="px-3 py-2 space-y-2">
+            <Input
+              placeholder="New profile name"
+              value={usernameInput}
+              onChange={(e) => setUsernameInput(e.target.value)}
+            />
+            <Button
+              variant="default"
+              size="sm"
+              disabled={!usernameInput.trim()}
+              onClick={() => {
+                const trimmed = usernameInput.trim()
+                if (!trimmed) return
+                nextProfileLoadModeRef.current = 'create'
+                setUsername(trimmed)
+                setSelectedUser(trimmed)
+                setProfileReady(false)
+                toast.success(`Created and switched to ${trimmed}`)
+              }}
+            >
+              Create profile
+            </Button>
+          </div>
+        </>
+      )}
+    </>
+  )
 
   return (
     <div className="min-h-screen bg-background">
@@ -2082,152 +2233,7 @@ export default function Dashboard() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-64">
-                  <div className="px-3 py-2">
-                    <p className="text-xs font-medium text-muted-foreground">Profiles</p>
-                  </div>
-                  {userList.length === 0 ? (
-                    <div className="px-3 py-2 space-y-2">
-                      <Input
-                        placeholder="New profile name"
-                        value={usernameInput}
-                        onChange={(e) => setUsernameInput(e.target.value)}
-                      />
-                      <Button
-                        variant="default"
-                        size="sm"
-                        disabled={!usernameInput.trim()}
-                        onClick={() => {
-                          const trimmed = usernameInput.trim()
-                          if (!trimmed) return
-                          nextProfileLoadModeRef.current = 'create'
-                          setUsername(trimmed)
-                          setSelectedUser(trimmed)
-                          setProfileReady(false)
-                          toast.success(`Created and switched to ${trimmed}`)
-                        }}
-                      >
-                        Create profile
-                      </Button>
-                    </div>
-                  ) : (
-                    <>
-                      {userList.map((user) => (
-                        <DropdownMenuItem
-                          key={user}
-                          onSelect={(e) => {
-                            e.preventDefault()
-                            setSelectedUser(user)
-                          }}
-                          className={cn(
-                            username === user && 'font-semibold',
-                            selectedUser === user && 'bg-accent text-accent-foreground'
-                          )}
-                        >
-                          {user}
-                        </DropdownMenuItem>
-                      ))}
-                      <DropdownMenuSeparator />
-                      <div className="px-3 py-2 space-y-2">
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="default"
-                            size="sm"
-                            disabled={!selectedUser}
-                          onClick={() => {
-                            if (!selectedUser) return
-                            nextProfileLoadModeRef.current = 'manual'
-                            setUsername(selectedUser)
-                            toast.success(`Switched to ${selectedUser}`)
-                          }}
-                        >
-                          Use selected
-                          </Button>
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            disabled={!selectedUser}
-                          onClick={async () => {
-                            if (!selectedUser) return
-                            try {
-                              const res = await fetch(
-                                `/api/preferences?username=${encodeURIComponent(selectedUser)}`,
-                                { method: 'DELETE' }
-                              )
-                              if (res.ok) {
-                                toast.success(`Deleted profile ${selectedUser}`)
-                                if (username === selectedUser) {
-                                  setUsername('')
-                                  if (typeof window !== 'undefined') {
-                                    window.localStorage.removeItem(USERNAME_STORAGE_KEY)
-                                  }
-                                  nextProfileLoadModeRef.current = 'manual'
-                                }
-                                setSelectedUser('')
-                                if (username === selectedUser) setProfileReady(false)
-                                await fetchUsers()
-                              } else {
-                                toast.error('Failed to delete profile')
-                              }
-                            } catch {
-                                toast.error('Failed to delete profile')
-                              }
-                            }}
-                          >
-                            Delete selected
-                          </Button>
-                        </div>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                        disabled={!selectedUser || !username || selectedUser === username}
-                        onClick={async () => {
-                          if (!selectedUser || !username || selectedUser === username) return
-                          try {
-                            const res = await fetch('/api/preferences/copy', {
-                              method: 'POST',
-                              headers: { 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ from: selectedUser, to: username })
-                            })
-                            if (res.ok) {
-                              await fetchPreferences(username)
-                              toast.success(`Copied ${selectedUser} into ${username}`)
-                            } else {
-                              toast.error('Failed to copy profile')
-                            }
-                          } catch {
-                            toast.error('Failed to copy profile')
-                            }
-                          }}
-                        >
-                          Copy selected into current
-                        </Button>
-                      </div>
-                      <DropdownMenuSeparator />
-                      <div className="px-3 py-2 space-y-2">
-                        <Input
-                          placeholder="New profile name"
-                          value={usernameInput}
-                          onChange={(e) => setUsernameInput(e.target.value)}
-                        />
-                        <Button
-                          variant="default"
-                          size="sm"
-                        disabled={!usernameInput.trim()}
-                        onClick={() => {
-                          const trimmed = usernameInput.trim()
-                          if (!trimmed) return
-                          nextProfileLoadModeRef.current = 'create'
-                          setUsername(trimmed)
-                          setSelectedUser(trimmed)
-                          setProfileReady(false)
-                          toast.success(`Created and switched to ${trimmed}`)
-                        }}
-                        >
-                          Create profile
-                        </Button>
-                      </div>
-                    </>
-                  )}
+                  {renderProfileMenuContent()}
                 </DropdownMenuContent>
               </DropdownMenu>
               <div className="flex items-center gap-2">
@@ -2255,71 +2261,83 @@ export default function Dashboard() {
                 </DialogContent>
               </Dialog>
             </div>
-            <Drawer open={mobileControlsOpen} onOpenChange={setMobileControlsOpen}>
-              <DrawerTrigger asChild>
-                <Button variant="outline" size="icon" className="md:hidden">
-                  <SlidersHorizontal className="h-5 w-5" />
-                </Button>
-              </DrawerTrigger>
-              <DrawerContent className="md:hidden">
-                <DrawerHeader>
-                  <DrawerTitle>Quick Controls</DrawerTitle>
-                </DrawerHeader>
-                <div className="space-y-4 px-[var(--page-gutter)] pb-6">
-                  <div className="flex items-center justify-between rounded-lg border px-4 py-3">
-                    <div className="flex items-center gap-2 text-sm font-medium">
-                      <Activity className="h-4 w-4" />
-                      <span>Last updated</span>
+            <div className="flex items-center gap-2 md:hidden">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="icon">
+                    <User className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64">
+                  {renderProfileMenuContent()}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Drawer open={mobileControlsOpen} onOpenChange={setMobileControlsOpen}>
+                <DrawerTrigger asChild>
+                  <Button variant="outline" size="icon">
+                    <SlidersHorizontal className="h-5 w-5" />
+                  </Button>
+                </DrawerTrigger>
+                <DrawerContent className="md:hidden">
+                  <DrawerHeader>
+                    <DrawerTitle>Quick Controls</DrawerTitle>
+                  </DrawerHeader>
+                  <div className="space-y-4 px-[var(--page-gutter)] pb-6">
+                    <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+                      <div className="flex items-center gap-2 text-sm font-medium">
+                        <Activity className="h-4 w-4" />
+                        <span>Last updated</span>
+                      </div>
+                      <span className="text-sm text-muted-foreground">{lastUpdatedLabel}</span>
                     </div>
-                    <span className="text-sm text-muted-foreground">{lastUpdatedLabel}</span>
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg border px-4 py-3">
-                    <div className="flex flex-col gap-1">
-                      <span className="text-sm font-medium">UPS</span>
-                      <span className="text-xs text-muted-foreground">
-                        {!nutConfigured
-                          ? 'Disabled'
-                          : nutError
-                            ? 'Error'
-                            : nutOnBattery
-                              ? 'On Battery'
-                              : 'Online'}
-                        {nutCharge !== null ? ` • ${nutCharge}%` : ''}
-                        {nutRuntimeMinutes !== null ? ` • ${nutRuntimeMinutes}m` : ''}
-                      </span>
+                    <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-sm font-medium">UPS</span>
+                        <span className="text-xs text-muted-foreground">
+                          {!nutConfigured
+                            ? 'Disabled'
+                            : nutError
+                              ? 'Error'
+                              : nutOnBattery
+                                ? 'On Battery'
+                                : 'Online'}
+                          {nutCharge !== null ? ` • ${nutCharge}%` : ''}
+                          {nutRuntimeMinutes !== null ? ` • ${nutRuntimeMinutes}m` : ''}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => nutConfigured && setNutDetailsOpen(true)}
+                        className={cn(
+                          'flex items-center gap-2 rounded-md px-2 py-1 text-xs transition',
+                          nutIndicatorClass,
+                          !nutConfigured && 'cursor-not-allowed opacity-60'
+                        )}
+                      >
+                        <span className={cn('h-2.5 w-2.5 rounded-full', nutIndicatorDot)} />
+                        <Battery className="h-5 w-5 text-primary" />
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => nutConfigured && setNutDetailsOpen(true)}
-                      className={cn(
-                        'flex items-center gap-2 rounded-md px-2 py-1 text-xs transition',
-                        nutIndicatorClass,
-                        !nutConfigured && 'cursor-not-allowed opacity-60'
-                      )}
-                    >
-                      <span className={cn('h-2.5 w-2.5 rounded-full', nutIndicatorDot)} />
-                      <Battery className="h-5 w-5 text-primary" />
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between rounded-lg border px-4 py-3">
-                    <div className="flex flex-col gap-1">
-                      <span className="text-sm font-medium">Auto Refresh</span>
-                      <span className="text-xs text-muted-foreground">Pause to save battery</span>
+                    <div className="flex items-center justify-between rounded-lg border px-4 py-3">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-sm font-medium">Auto Refresh</span>
+                        <span className="text-xs text-muted-foreground">Pause to save battery</span>
+                      </div>
+                      <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
                     </div>
-                    <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} />
-                </div>
-                <div className="rounded-lg border">
-                  <div className="border-b px-4 py-3">
-                    <p className="text-sm font-semibold">Settings</p>
-                    <p className="text-xs text-muted-foreground">Manage systems & preferences</p>
+                    <div className="rounded-lg border">
+                      <div className="border-b px-4 py-3">
+                        <p className="text-sm font-semibold">Settings</p>
+                        <p className="text-xs text-muted-foreground">Manage systems & preferences</p>
+                      </div>
+                      <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
+                        {renderSettingsContent(true)}
+                      </div>
+                    </div>
                   </div>
-                  <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
-                    {renderSettingsContent(true)}
-                  </div>
-                </div>
-              </div>
-            </DrawerContent>
-          </Drawer>
+                </DrawerContent>
+              </Drawer>
+            </div>
           </div>
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
