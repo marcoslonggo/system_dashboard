@@ -2520,7 +2520,7 @@ export default function Dashboard() {
                                   resolvedUrl={normalized}
                                   isWeb={isWeb}
                                   isHidden={!!isHidden}
-                                  showOpen={!!(normalized && isWeb && openEnabled)}
+                                  showOpen={!!(normalized && isWeb && openEnabled && app.status === 'running')}
                                   onToggleOpen={() =>
                                     setOpenDisabled((prev) => {
                                       const next = { ...prev, [app.globalId]: !prev[app.globalId] }
