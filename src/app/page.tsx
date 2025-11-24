@@ -161,6 +161,7 @@ const APP_VISIBILITY_STORAGE_KEY = 'dashboard-app-visibility'
 const APP_GROUPS_STORAGE_KEY = 'dashboard-app-groups'
 const GROUPS_STORAGE_KEY = 'dashboard-groups'
 const USERNAME_STORAGE_KEY = 'dashboard-username'
+const SYSTEMS_CACHE_KEY = 'dashboard-systems-cache'
 const DEFAULT_CARD_WIDTH = 240
 const MIN_CARD_WIDTH = 220
 const MOBILE_CARD_MIN_WIDTH = 170
@@ -327,6 +328,7 @@ export default function Dashboard() {
   const [serverDetails, setServerDetails] = useState<SystemInfo | null>(null)
   const [config, setConfig] = useState<DashboardPreferences>(DEFAULT_DASHBOARD_PREFS)
   const [systemConfigs, setSystemConfigs] = useState<StoredSystemConfig[]>([])
+  const [isRefreshing, setIsRefreshing] = useState(false)
   const [configForm, setConfigForm] = useState<SystemConfigForm>(emptyConfigForm)
   const [editingConfigId, setEditingConfigId] = useState<string | null>(null)
   const [configLoading, setConfigLoading] = useState(false)
@@ -457,6 +459,29 @@ export default function Dashboard() {
       // ignore malformed
     }
   }, [])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = window.localStorage.getItem(cacheKey)
+        if (cached) {
+          const parsed = JSON.parse(cached)
+          if (parsed?.data && Array.isArray(parsed.data)) {
+            setSystems(parsed.data)
+            if (parsed.timestamp) {
+              const ts = new Date(parsed.timestamp)
+              if (!Number.isNaN(ts.getTime())) {
+                setLastUpdated(ts)
+              }
+            }
+            setIsRefreshing(true)
+          }
+        }
+      } catch {
+        // ignore cache errors
+      }
+    }
+  }, [cacheKey])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -626,12 +651,15 @@ export default function Dashboard() {
     }
   }, [fetchNutStatus])
 
+  const cacheKey = useMemo(() => `${SYSTEMS_CACHE_KEY}:${username || 'default'}`, [username])
+
   const fetchSystems = useCallback(async () => {
     if (systemConfigs.length === 0) {
       setSystems([])
       setLastUpdated(null)
       return
     }
+    setIsRefreshing(true)
     try {
       const response = await fetch('/api/systems')
       if (!response.ok) {
@@ -640,12 +668,25 @@ export default function Dashboard() {
       const data = await response.json()
       if (data.success) {
         setSystems(data.data)
-        setLastUpdated(new Date())
+        const now = new Date()
+        setLastUpdated(now)
+        if (typeof window !== 'undefined') {
+          try {
+            window.localStorage.setItem(
+              cacheKey,
+              JSON.stringify({ data: data.data, timestamp: now.toISOString() })
+            )
+          } catch {
+            // ignore cache write errors
+          }
+        }
       }
     } catch (error) {
       console.error('Failed to fetch system data:', error)
+    } finally {
+      setIsRefreshing(false)
     }
-  }, [systemConfigs.length])
+  }, [cacheKey, systemConfigs.length])
 
   // Auto-refresh effect
   useEffect(() => {
@@ -2354,6 +2395,11 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Activity className="h-4 w-4" />
               <span>Last updated: {lastUpdatedLabel}</span>
+              {isRefreshing && (
+                <span className="rounded-full bg-muted px-2 py-1 text-[11px] text-foreground">
+                  Refreshing statuses…
+                </span>
+              )}
               <span className="rounded-full bg-muted px-2 py-1 text-xs text-foreground">{appTotalsLabel}</span>
               <span
                 role="button"
