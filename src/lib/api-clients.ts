@@ -357,7 +357,7 @@ export class UnraidClient {
         'x-api-key': this.apiKey,
         'Content-Type': 'application/json'
       },
-      timeout: 10000,
+      timeout: 30000,
       httpsAgent
     })
 
@@ -365,7 +365,11 @@ export class UnraidClient {
       (response) => response,
       (error) => {
         console.error('Unraid GraphQL Error:', error.response?.data || error.message)
-        throw new Error(`Unraid API Error: ${error.response?.status} ${error.response?.data?.error || error.message}`)
+        if (axios.isAxiosError(error) && error.code === 'ECONNABORTED') {
+          throw new Error('Unraid API Error: timeout waiting for response')
+        }
+        const status = error.response?.status ?? 'unknown'
+        throw new Error(`Unraid API Error: ${status} ${error.response?.data?.error || error.message}`)
       }
     )
   }
