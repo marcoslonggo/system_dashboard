@@ -22,6 +22,25 @@ npm run dev
 ```
 Open http://localhost:3000
 
+## Docker
+- Published image: `docker.io/marcoslongo/dashboard`
+- Pull and run:
+  ```bash
+  docker run -d --name dashboard -p 3000:3000 docker.io/marcoslongo/dashboard
+  ```
+- Build locally:
+  ```bash
+  docker build -t docker.io/marcoslongo/dashboard .
+  docker run -d --name dashboard -p 3000:3000 docker.io/marcoslongo/dashboard
+  ```
+- Persist data (SQLite in `prisma/`):
+  ```bash
+  docker run -d --name dashboard \
+    -p 3000:3000 \
+    -v /opt/dashboard/data:/app/prisma \
+    docker.io/marcoslongo/dashboard
+  ```
+
 ## Notes
 - Profiles persist in SQLite via `/api/preferences`.
 - Missing profiles are never auto-created; use the profile menu to create.
