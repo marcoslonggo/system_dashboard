@@ -3054,6 +3054,9 @@ function SortableAppCard({
                 Start
               </Button>
             )}
+            <span className="text-[11px] text-muted-foreground capitalize">
+              Status: {app.status || 'unknown'}
+            </span>
           </CardContent>
         </Card>
       </div>
@@ -3190,11 +3193,14 @@ function SortableAppCard({
                 variant="default"
                 onClick={() => onAction('start')}
                 className={cn('flex items-center gap-1', compactActions && 'h-7 px-2 text-[11px]')}
-              >
-                <Power className="h-3 w-3" />
-                Start
-              </Button>
+                >
+                  <Power className="h-3 w-3" />
+                  Start
+                </Button>
             )}
+            <span className="text-xs text-muted-foreground capitalize">
+              Status: {app.status || 'unknown'}
+            </span>
           </div>
         </CardContent>
       </Card>
