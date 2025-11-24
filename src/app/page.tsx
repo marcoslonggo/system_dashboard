@@ -364,6 +364,7 @@ export default function Dashboard() {
   const groupSortableIds = useMemo(() => groups.map((g) => `group-item:${g.id}`), [groups])
   const saveDebounceRef = useRef<NodeJS.Timeout | null>(null)
   const [userList, setUserList] = useState<string[]>([])
+  const cacheKey = useMemo(() => `${SYSTEMS_CACHE_KEY}:${username || 'default'}`, [username])
   const resetUserScopedState = useCallback(() => {
     setGroups([])
     setAppGroups({})
@@ -650,8 +651,6 @@ export default function Dashboard() {
       console.warn('Failed to load NUT config', error)
     }
   }, [fetchNutStatus])
-
-  const cacheKey = useMemo(() => `${SYSTEMS_CACHE_KEY}:${username || 'default'}`, [username])
 
   const fetchSystems = useCallback(async () => {
     if (systemConfigs.length === 0) {
@@ -1107,6 +1106,12 @@ export default function Dashboard() {
     fetchUsers()
     nextProfileLoadModeRef.current = 'manual'
   }, [username, fetchPreferences, resetUserScopedState, fetchUsers])
+
+  useEffect(() => {
+    if (!profileReady) return
+    if (systemConfigs.length === 0) return
+    fetchSystems()
+  }, [profileReady, systemConfigs.length, fetchSystems])
 
   useEffect(() => {
     fetchUsers()
