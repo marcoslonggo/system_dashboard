@@ -1439,7 +1439,15 @@ export default function Dashboard() {
       const data = await response.json()
       
       if (response.ok && data.success) {
-        // Update local state optimistically
+        const returnedStatus: App['status'] | undefined =
+          data.status === 'running' ||
+          data.status === 'stopped' ||
+          data.status === 'restarting' ||
+          data.status === 'error'
+            ? data.status
+            : undefined
+        const fallbackStatus = action === 'stop' ? 'stopped' : action === 'restart' ? 'restarting' : 'running'
+        const newStatus = returnedStatus || fallbackStatus
         setSystems((prevSystems) =>
           prevSystems.map((prevSystem) => {
             const matchesId = system.id && prevSystem.id === system.id
@@ -1451,7 +1459,6 @@ export default function Dashboard() {
               ...prevSystem,
               apps: prevSystem.apps.map((app) => {
                 if (app.id !== appId) return app
-                const newStatus = action === 'stop' ? 'stopped' : 'running'
                 return { ...app, status: newStatus }
               })
             }

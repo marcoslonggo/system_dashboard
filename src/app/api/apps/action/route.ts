@@ -50,6 +50,7 @@ export async function POST(request: NextRequest) {
 
     let resolvedType = systemType || ''
     let success = false
+    let latestStatus: string | null | undefined = null
     let error: string | null = null
     const apiClient = new SystemAPIClient()
 
@@ -77,7 +78,8 @@ export async function POST(request: NextRequest) {
             storedConfig.useSsl,
             storedConfig.allowSelfSigned
           )
-          success = await apiClient.executeTrueNASAction(appId, action)
+          const result = await apiClient.executeTrueNASAction(appId, action)
+          success = !!result?.success
         } else {
           apiClient.initializeUnraid(
             storedConfig.host,
@@ -86,7 +88,9 @@ export async function POST(request: NextRequest) {
             storedConfig.useSsl,
             storedConfig.allowSelfSigned
           )
-          success = await apiClient.executeUnraidAction(appId, action)
+          const result = await apiClient.executeUnraidAction(appId, action)
+          success = !!result?.success
+          latestStatus = result?.status ?? null
         }
       } catch (apiError) {
         console.error('Stored system API error', apiError)
@@ -139,7 +143,8 @@ export async function POST(request: NextRequest) {
             fallback.useSsl,
             fallback.allowSelfSigned
           )
-          success = await apiClient.executeTrueNASAction(appId, action)
+          const result = await apiClient.executeTrueNASAction(appId, action)
+          success = !!result?.success
         } else {
           apiClient.initializeUnraid(
             fallback.host,
@@ -148,7 +153,9 @@ export async function POST(request: NextRequest) {
             fallback.useSsl,
             fallback.allowSelfSigned
           )
-          success = await apiClient.executeUnraidAction(appId, action)
+          const result = await apiClient.executeUnraidAction(appId, action)
+          success = !!result?.success
+          latestStatus = result?.status ?? null
         }
       } catch (apiError) {
         console.error('Fallback system API error', apiError)
@@ -160,6 +167,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         message: `Successfully ${action}ed ${appId}`,
+        status: latestStatus,
         systemType: resolvedType,
         appId,
         action,

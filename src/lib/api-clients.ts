@@ -9,6 +9,8 @@ export class TrueNASClient {
   private apiKey: string
   private host: string
   private useSsl: boolean
+  private pollIntervalMs = 1000
+  private pollTimeoutMs = 10000
 
   constructor(
     host: string,
@@ -357,7 +359,7 @@ export class UnraidClient {
         'x-api-key': this.apiKey,
         'Content-Type': 'application/json'
       },
-      timeout: 30000,
+      timeout: 10000,
       httpsAgent
     })
 
@@ -483,6 +485,26 @@ export class UnraidClient {
     await new Promise(resolve => setTimeout(resolve, 2000))
     await this.startApp(appId)
     return true
+  }
+
+  async getContainerStatus(appId: string) {
+    const info = await this.getSystemInfo()
+    const app = info.apps.find((c) => c.id === appId)
+    return app?.status
+  }
+
+  async waitForStatusChange(appId: string, previous?: string | null) {
+    const deadline = Date.now() + this.pollTimeoutMs
+    let lastStatus: string | undefined | null = previous
+    while (Date.now() < deadline) {
+      const status = await this.getContainerStatus(appId)
+      if (status && status !== previous) {
+        return status
+      }
+      lastStatus = status
+      await new Promise((resolve) => setTimeout(resolve, this.pollIntervalMs))
+    }
+    return lastStatus ?? previous
   }
 
   private mapContainers(containers: Array<{
@@ -615,30 +637,46 @@ export class SystemAPIClient {
 
     switch (action) {
       case 'start':
-        return await this.truenasClient.startApp(appId)
+        await this.truenasClient.startApp(appId)
+        return { success: true as const }
       case 'stop':
-        return await this.truenasClient.stopApp(appId)
+        await this.truenasClient.stopApp(appId)
+        return { success: true as const }
       case 'restart':
-        return await this.truenasClient.restartApp(appId)
+        await this.truenasClient.restartApp(appId)
+        return { success: true as const }
       default:
         throw new Error(`Unknown action: ${action}`)
     }
   }
 
-  async executeUnraidAction(appId: string, action: 'start' | 'stop' | 'restart') {
+  async executeUnraidAction(appId: string, action: 'start' | 'stop' | 'restart'): Promise<{ success: true; status?: string | null }> {
     if (!this.unraidClient) {
       throw new Error('Unraid client not initialized')
     }
 
-    switch (action) {
-      case 'start':
-        return await this.unraidClient.startApp(appId)
-      case 'stop':
-        return await this.unraidClient.stopApp(appId)
-      case 'restart':
-        return await this.unraidClient.restartApp(appId)
-      default:
-        throw new Error(`Unknown action: ${action}`)
+    let previousStatus: string | null = null
+    try {
+      previousStatus = await this.unraidClient.getContainerStatus(appId) || null
+    } catch {
+      // ignore prefetch errors
     }
+
+    const perform = async () => {
+      switch (action) {
+        case 'start':
+          return await this.unraidClient!.startApp(appId)
+        case 'stop':
+          return await this.unraidClient!.stopApp(appId)
+        case 'restart':
+          return await this.unraidClient!.restartApp(appId)
+        default:
+          throw new Error(`Unknown action: ${action}`)
+      }
+    }
+
+    await perform()
+    const status = await this.unraidClient.waitForStatusChange(appId, previousStatus)
+    return { success: true as const, status }
   }
 }
