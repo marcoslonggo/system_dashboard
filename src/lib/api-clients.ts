@@ -495,11 +495,15 @@ export class UnraidClient {
   }>) {
     return containers.map((container, index) => {
       const name = container.names?.[0]?.replace(/^\//, '') || `Container ${index + 1}`
-      const status = container.state === 'RUNNING'
-        ? 'running'
-        : container.state === 'EXITED'
-          ? 'stopped'
-          : 'error'
+      const state = (container.state || '').toLowerCase()
+      const status =
+        state === 'running'
+          ? 'running'
+          : state === 'exited'
+            ? 'stopped'
+            : state === 'restarting' || state === 'starting'
+              ? 'restarting'
+              : 'error'
       const slug = slugify(name || container.id)
 
       return {

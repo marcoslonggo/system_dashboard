@@ -67,7 +67,7 @@ interface SystemInfo {
 interface App {
   id: string
   name: string
-  status: 'running' | 'stopped' | 'error'
+  status: 'running' | 'stopped' | 'restarting' | 'error'
   cpu: number | null
   memory: number | null
   icon?: string
@@ -236,6 +236,8 @@ const getStatusColor = (status: string) => {
     case 'online':
     case 'running':
       return 'bg-green-500'
+    case 'restarting':
+      return 'bg-yellow-500'
     case 'offline':
     case 'stopped':
       return 'bg-red-500'
@@ -252,6 +254,8 @@ const getStatusBadge = (status: string, uptime?: string) => {
     case 'online':
     case 'running':
       return <Badge variant="default" className="bg-green-100 text-green-800">Online</Badge>
+    case 'restarting':
+      return <Badge variant="secondary" className="bg-amber-100 text-amber-900">Restarting</Badge>
     case 'offline':
     case 'stopped':
       if (uptime === 'API key required') {

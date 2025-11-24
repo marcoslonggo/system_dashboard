@@ -20,7 +20,7 @@ interface SystemInfo {
 interface App {
   id: string
   name: string
-  status: 'running' | 'stopped' | 'error'
+  status: 'running' | 'stopped' | 'restarting' | 'error'
   cpu: number | null
   memory: number | null
   icon?: string
