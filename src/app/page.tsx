@@ -329,6 +329,7 @@ export default function Dashboard() {
   const [config, setConfig] = useState<DashboardPreferences>(DEFAULT_DASHBOARD_PREFS)
   const [systemConfigs, setSystemConfigs] = useState<StoredSystemConfig[]>([])
   const [isRefreshing, setIsRefreshing] = useState(false)
+  const [hasRefreshedOnce, setHasRefreshedOnce] = useState(false)
   const [configForm, setConfigForm] = useState<SystemConfigForm>(emptyConfigForm)
   const [editingConfigId, setEditingConfigId] = useState<string | null>(null)
   const [configLoading, setConfigLoading] = useState(false)
@@ -683,6 +684,7 @@ export default function Dashboard() {
     } catch (error) {
       console.error('Failed to fetch system data:', error)
     } finally {
+      setHasRefreshedOnce(true)
       setIsRefreshing(false)
     }
   }, [cacheKey, systemConfigs.length])
@@ -2097,6 +2099,7 @@ export default function Dashboard() {
     iconPickerTarget?.icon ||
     iconPickerTarget?.fallbackIcon ||
     DOCKER_ICON_FALLBACK
+  const showInitialRefreshMessage = isRefreshing && !hasRefreshedOnce
   const nutRuntimeMinutes =
     typeof nutStatus?.runtimeSeconds === 'number'
       ? Math.max(0, Math.round(nutStatus.runtimeSeconds / 60))
@@ -2400,7 +2403,7 @@ export default function Dashboard() {
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Activity className="h-4 w-4" />
               <span>Last updated: {lastUpdatedLabel}</span>
-              {isRefreshing && (
+              {showInitialRefreshMessage && (
                 <span className="rounded-full bg-muted px-2 py-1 text-[11px] text-foreground">
                   Refreshing statuses…
                 </span>
